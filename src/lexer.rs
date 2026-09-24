@@ -12,19 +12,33 @@ pub(crate) enum BinOp {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum Type {
+    Int,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum Token {
     Number(u128),
     BinOp(BinOp),
+    LeftParen, // ( 
+    RightParen, // )
+    LeftBrace, // {
+    RightBrace, // }
+    SemiColon, // ;
+    // TODO : make the equal a binop
+    Equal, // =
     Return,
+    Type(Type),
     Identifier(String), // TODO : replace by identifier using a string interner (use FxHashMap, https://github.com/Vinz2008/rustaml/blob/main/src/string_intern.rs or https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
 }
 
 fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     let mut numbers = ArrayString::<19>::new();
-    let mut c = chars.next();
+    let mut c = chars.peek().copied();
     while let Some('0'..='9') = c {
+        chars.next();
         numbers.try_push(c.unwrap()).expect("too big of a number in int lex");
-        c = chars.next();
+        c = chars.peek().copied();
     }
 
     // TODO : optimize this by transforming to a smaller number like i64, i32, etc, if small (will it really optimize it ? test it)
@@ -45,18 +59,24 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
 
 fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     let mut identifier = String::new();
-    let mut c = chars.next();
+    let mut c = chars.peek().copied();
     while let Some('a'..='z' | 'A'..='Z' | '_' | '0'..='9') = c {
+        chars.next();
         identifier.push(c.unwrap());
-        c = chars.next();
+        c = chars.peek().copied();
     }
     let tok = match identifier.as_str() {
+        "int" => Token::Type(Type::Int), // TODO : add more types
         "return" => Token::Return,
         _ => Token::Identifier(identifier),
     };
     tokens.push_back(tok);
 }
 
+fn single_char_tok(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>, tok : Token){
+    tokens.push_back(tok);
+    chars.next();
+}
 
 pub(crate) fn lex(s : &str) -> VecDeque<Token> {
     let mut chars = s.chars().peekable();
@@ -70,6 +90,14 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
             '0'..='9' => lex_nb(&mut chars, &mut tokens),
             '+' | '-' | '*' | '/' => lex_op(&mut chars, &mut tokens),
             'a'..='z' | 'A'..='Z' | '_' => lex_identifier(&mut chars, &mut tokens),
+            '(' => single_char_tok(&mut chars, &mut tokens, Token::LeftParen),
+            ')' => {
+                single_char_tok(&mut chars, &mut tokens, Token::RightParen);
+            },
+            '{' => single_char_tok(&mut chars, &mut tokens, Token::LeftBrace),
+            '}' => single_char_tok(&mut chars, &mut tokens, Token::RightBrace),
+            ';' => single_char_tok(&mut chars, &mut tokens, Token::SemiColon),
+            '=' => single_char_tok(&mut chars, &mut tokens, Token::Equal),
             _ => panic!("Unknown token '{}'", c),
         }
     }
