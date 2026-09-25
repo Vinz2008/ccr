@@ -28,8 +28,6 @@ enum Reg {
     Count,
 }
 
-const REG_COUNT : usize = Reg::Count as usize;
-
 // TODO : maybe refactor the AsmType passed everywhere, to have the infos in the reg (need for it to become a struct)
 impl Reg {
     fn to_addressing_str(self, reg_type : AsmType) -> &'static str {
@@ -73,19 +71,27 @@ impl Reg {
             // TODO : add all the variants of these
             Reg::R8 => match reg_type {
                 AsmType::Qword => "r8",
-                _ => todo!(),
+                AsmType::Dword => "r8d",
+                AsmType::Word => "r8w",
+                AsmType::Byte => "r8b",
             },
             Reg::R9 => match reg_type {
                 AsmType::Qword => "r9",
-                _ => todo!(),
+                AsmType::Dword => "r9d",
+                AsmType::Word => "r9w",
+                AsmType::Byte => "r9b",
             },
             Reg::R10 => match reg_type {
                 AsmType::Qword => "r10",
-                _ => todo!(),
+                AsmType::Dword => "r10d",
+                AsmType::Word => "r10w",
+                AsmType::Byte => "r10b",
             }
             Reg::R11 => match reg_type {
                 AsmType::Qword => "r11",
-                _ => todo!(),
+                AsmType::Dword => "r11d",
+                AsmType::Word => "r11w",
+                AsmType::Byte => "r11b",
             }
             Reg::R12 => match reg_type {
                 AsmType::Qword => "r12",
@@ -321,8 +327,6 @@ fn codegen_number(nb : u128) -> Value {
 
 // TODO : need to add the type conversions (for ex when adding a constant that has been put in a 64 bit reg and a 32 bit add with a var)
 
-// TODO : register allocation
-
 fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinOp, rhs : &ExprAst, expr_type : &Type) -> Value {
     let mut lhs_val = codegen_expr(codegen_context, lhs);
     let mut rhs_val = codegen_expr(codegen_context, rhs);
@@ -352,11 +356,15 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
 
 fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Value {
     let reg = codegen_context.next_reg().unwrap();
-    let stack_offset = codegen_context.vars.get(var_name).unwrap().stack_offset.unwrap();
-    let mov_type = AsmType::Dword; // TODO
+    let var = codegen_context.vars.get(var_name).unwrap();
+    let stack_offset = var.stack_offset.unwrap();
+    let var_type = &var.var_type;
+    let mov_type = asm_type_from_type(var_type);
     emit_mov(codegen_context, WriteVal::Reg(reg), Value::Mem(MemAddr::Offset { reg: Reg::Rbp, off: -(stack_offset as i32) }), mov_type);
     Value::Reg(reg)
 }
+
+// TODO : save register that need to be saved when called (and restored after), also save registers at the prologue, epilogue of function that need to be saved https://s-mazigh.github.io/ASMx86_64/x86_64-LesBases.html
 
 fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, args : &[ExprAst]) -> Value {
     let ret_type = *fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
@@ -529,7 +537,7 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
     }
     codegen_context.reset_stack_offset();
 
-    let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Vec<_>>();
+    let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Box<[_]>>();
     codegen_context.vars.insert(name.to_string(), Var { var_type: Type::Function(FunctionType {
         ret_type: Box::new(return_type.clone()),
         args_type,

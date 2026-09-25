@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use crate::lexer::{BinOp, Token, Type};
 
 // TODO : make it flat ? (is more optimized, but would complicated mutating it for peep hole opts)
-// TODO : make the Vecs Box<[]> and the Strings Box<str>
 #[derive(Debug)]
 pub(crate) enum ExprAst {
     Number(u128),
@@ -12,10 +11,10 @@ pub(crate) enum ExprAst {
         op : BinOp,
         rhs : Box<ExprAst>,
     },
-    VarUse(String),
+    VarUse(Box<str>),
     FunctionCall {
         fun : Box<ExprAst>,
-        args : Vec<ExprAst>,
+        args : Box<[ExprAst]>,
     }
 }
 
@@ -53,7 +52,7 @@ fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
     let t = tokens.pop_front().unwrap(); // TODO : better error handling
     match t {
         Token::Number(nb) => ExprAst::Number(nb),
-        Token::Identifier(ident) => ExprAst::VarUse(ident),
+        Token::Identifier(ident) => ExprAst::VarUse(ident.into_boxed_str()),
         _ => panic!("Unknown token {:?}", t),
     }
 }
@@ -74,7 +73,7 @@ fn parse_function_call(tokens : &mut VecDeque<Token>) -> ExprAst {
             args.push(arg);
         }
         tokens.pop_front().unwrap(); // eat )
-        ExprAst::FunctionCall { fun: Box::new(expr), args }
+        ExprAst::FunctionCall { fun: Box::new(expr), args: args.into_boxed_slice() }
     } else {
         expr
     }

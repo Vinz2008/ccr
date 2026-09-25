@@ -14,7 +14,7 @@ pub(crate) enum BinOp {
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub(crate) struct FunctionType {
     pub ret_type: Box<Type>,
-    pub args_type : Vec<Type>, // TODO : make this a Box<[Type]>
+    pub args_type : Box<[Type]>,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
