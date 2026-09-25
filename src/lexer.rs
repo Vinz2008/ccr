@@ -11,9 +11,28 @@ pub(crate) enum BinOp {
     Div,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
+pub(crate) struct FunctionType {
+    pub ret_type: Box<Type>,
+    pub args_type : Vec<Type>, // TODO : make this a Box<[Type]>
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub(crate) enum Type {
+    Char,
+    Short,
     Int,
+    Function(FunctionType),
+    Long,
+}
+
+impl Type {
+    pub(crate) fn into_function_type(self) -> Option<FunctionType> {
+        match self {
+            Type::Function(func_type) => Some(func_type),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -47,14 +66,35 @@ fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
 }
 
 fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
-    let binop = match chars.next().unwrap() {
+    let c = chars.next().unwrap();
+    if c == '/' && matches!(chars.peek(), Some('/')) {
+        while let Some(c) = chars.peek() && *c != '\n' {
+            chars.next().unwrap();
+        }
+        if let Some(c) = chars.peek() && *c == '\n' {
+            chars.next().unwrap();
+        }
+        return;
+    }
+    let binop = match c {
         '+' => BinOp::Plus,
         '-' => BinOp::Minus,
         '*' => BinOp::Mult,
         '/' => BinOp::Div,
         c => panic!("unknown op {}", c),
     };
+    
     tokens.push_back(Token::BinOp(binop));
+}
+
+fn lex_type(ident : &str) -> Type {
+    match ident {
+        "char" => Type::Char,
+        "short" => Type::Short,
+        "int" => Type::Int,
+        "long" => Type::Long,
+        _ => panic!("wrong type"),
+    }
 }
 
 fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
@@ -66,7 +106,7 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
         c = chars.peek().copied();
     }
     let tok = match identifier.as_str() {
-        "int" => Token::Type(Type::Int), // TODO : add more types
+        "char" | "short" | "int" | "long"  => Token::Type(lex_type(identifier.as_str())), // TODO : add more types
         "return" => Token::Return,
         _ => Token::Identifier(identifier),
     };
@@ -76,6 +116,15 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
 fn single_char_tok(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>, tok : Token){
     tokens.push_back(tok);
     chars.next();
+}
+
+fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
+    while let Some(c) = chars.peek() && *c != '\n' {
+        chars.next().unwrap();
+    }
+    if let Some(c) = chars.peek() && *c == '\n' {
+        chars.next().unwrap();
+    }
 }
 
 pub(crate) fn lex(s : &str) -> VecDeque<Token> {
@@ -98,6 +147,7 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
             '}' => single_char_tok(&mut chars, &mut tokens, Token::RightBrace),
             ';' => single_char_tok(&mut chars, &mut tokens, Token::SemiColon),
             '=' => single_char_tok(&mut chars, &mut tokens, Token::Equal),
+            '#' => lex_cpp_metadata(&mut chars),
             _ => panic!("Unknown token '{}'", c),
         }
     }

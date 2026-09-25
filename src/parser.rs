@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use crate::lexer::{BinOp, Token, Type};
 
 // TODO : make it flat ? (is more optimized, but would complicated mutating it for peep hole opts)
+// TODO : make the Vecs Box<[]> and the Strings Box<str>
 #[derive(Debug)]
 pub(crate) enum ExprAst {
     Number(u128),
@@ -11,6 +12,11 @@ pub(crate) enum ExprAst {
         op : BinOp,
         rhs : Box<ExprAst>,
     },
+    VarUse(String),
+    FunctionCall {
+        fun : Box<ExprAst>,
+        args : Vec<ExprAst>,
+    }
 }
 
 
@@ -26,9 +32,16 @@ pub(crate) enum StatementAst {
 }
 
 #[derive(Debug)]
+pub(crate) struct Arg {
+    pub name : String,
+    pub arg_type : Type,
+}
+
+#[derive(Debug)]
 pub(crate) enum TopLevelAst {
     Function {
         name: String,
+        args : Vec<Arg>,
         body: Vec<StatementAst>,
         return_type : Type,
     }
@@ -40,7 +53,30 @@ fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
     let t = tokens.pop_front().unwrap(); // TODO : better error handling
     match t {
         Token::Number(nb) => ExprAst::Number(nb),
+        Token::Identifier(ident) => ExprAst::VarUse(ident),
         _ => panic!("Unknown token {:?}", t),
+    }
+}
+
+fn parse_function_call(tokens : &mut VecDeque<Token>) -> ExprAst {
+    let expr = parse_primary(tokens);
+    if let Some(Token::LeftParen) = tokens.front(){
+        tokens.pop_front().unwrap(); // eat (
+        let mut is_first = true;
+        let mut args = Vec::new();
+        while let Some(t) = tokens.front() && !matches!(t, Token::RightParen) {
+            if is_first {
+                is_first = false;
+            } else {
+                tokens.pop_front().unwrap(); // eat ,
+            }
+            let arg = parse_expr(tokens);
+            args.push(arg);
+        }
+        tokens.pop_front().unwrap(); // eat )
+        ExprAst::FunctionCall { fun: Box::new(expr), args }
+    } else {
+        expr
     }
 }
 
@@ -56,7 +92,7 @@ fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) 
     while let Some(Token::BinOp(binop)) = peek_tok && get_prec(binop) >= min_prec {
         let op = binop;
         let op_prec = get_prec(op);
-        tokens.pop_front();
+        tokens.pop_front().unwrap();
         let mut rhs = parse_primary(tokens);
         peek_tok = tokens.front().cloned();
 
@@ -75,7 +111,7 @@ fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) 
 }
 
 fn parse_expr(tokens : &mut VecDeque<Token>) -> ExprAst {
-    let lhs = parse_primary(tokens);
+    let lhs = parse_function_call(tokens);
     parse_binop(tokens, lhs, 0)
 }
 
@@ -86,7 +122,7 @@ fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> StatementAs
         _ => panic!("expected identifier"),
     };
 
-    tokens.pop_front(); // eat =
+    tokens.pop_front().unwrap(); // eat =
 
     let val = parse_expr(tokens);
 
@@ -99,6 +135,7 @@ fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> StatementAs
 
 fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
     let t = tokens.pop_front().unwrap(); // TODO : better error handling
+    dbg!(&t);
     let statement = match t {
         Token::Return => StatementAst::Return(Box::new(parse_expr(tokens))),
         Token::Type(t) => parse_var_decl(tokens, t),
@@ -106,7 +143,7 @@ fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
     };
     match tokens.front(){
         Some(Token::SemiColon) => {
-            tokens.pop_front();
+            tokens.pop_front().unwrap();
         },
         _ => panic!("missing semicolon"),
     }
@@ -120,23 +157,40 @@ fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst 
         Token::Identifier(ident) => ident,
         _ => panic!("expected identifier"),
     };
-    tokens.pop_front(); // eat (
+    tokens.pop_front().unwrap(); // eat (
+    let mut args = Vec::new();
+    let mut is_first = true;
     while let Some(t) = tokens.front() && !matches!(t, Token::RightParen) {
-        // TODO : parsing args decl
-        tokens.pop_front();
+        if is_first {
+            is_first = false;
+        } else {
+            tokens.pop_front().unwrap(); // eat ,
+        }
+        let type_tok = tokens.pop_front().unwrap();
+        let arg_type = match type_tok {
+            Token::Type(t) => t,
+            _ => panic!("expected type"),
+        };
+        let arg_name_tok = tokens.pop_front().unwrap();
+        let arg_name = match arg_name_tok {
+            Token::Identifier(arg_name) => arg_name,
+            _ => panic!("expected identifier"),
+        };
+        args.push(Arg { name: arg_name, arg_type });
     }
-    tokens.pop_front(); // eat )
-    tokens.pop_front(); // eat {
+    tokens.pop_front().unwrap(); // eat )
+    tokens.pop_front().unwrap(); // eat {
 
     let mut statements = Vec::new();
     while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
         statements.push(parse_statement(tokens));
     }
-    tokens.pop_front(); // eat }
+    tokens.pop_front().unwrap(); // eat }
     TopLevelAst::Function { 
         name: ident_str, 
         body: statements,
         return_type: t,
+        args,
     }
 }
 

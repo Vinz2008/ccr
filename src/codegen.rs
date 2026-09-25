@@ -1,8 +1,9 @@
 use std::{fmt::Write as _, fs::File, io::Write as _, mem};
 
+use arrayvec::ArrayVec;
 use rustc_hash::FxHashMap;
 
-use crate::{lexer::{BinOp, Type}, parser::{ExprAst, StatementAst, TopLevelAst}};
+use crate::{lexer::{BinOp, FunctionType, Type}, parser::{Arg, ExprAst, StatementAst, TopLevelAst}};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
@@ -14,7 +15,8 @@ enum Reg {
 
     Rbp, // stack frame start
     Rsp, // return pointer
-    // TODO : add rsi, rdi
+    Rsi,
+    Rdi,
     R8,
     R9,
     R10,
@@ -26,23 +28,89 @@ enum Reg {
     Count,
 }
 
+const REG_COUNT : usize = Reg::Count as usize;
+
+// TODO : maybe refactor the AsmType passed everywhere, to have the infos in the reg (need for it to become a struct)
 impl Reg {
-    fn to_addressing_str(self) -> &'static str {
+    fn to_addressing_str(self, reg_type : AsmType) -> &'static str {
         match self {
-            Reg::Rax => "rax",
-            Reg::Rbx => "rbx",
-            Reg::Rcx => "rcx",
-            Reg::Rdx => "rdx",
-            Reg::R8 => "r8",
-            Reg::R9 => "r9",
-            Reg::R10 => "r10",
-            Reg::R11 => "r11",
-            Reg::R12 => "r12",
-            Reg::R13 => "r13",
-            Reg::R14 => "r14",
-            Reg::R15 => "r15",
-            Reg::Rbp => "rbp",
-            Reg::Rsp => "rsp",
+            Reg::Rax => match reg_type {
+                AsmType::Qword => "rax",
+                AsmType::Dword => "eax",
+                AsmType::Word => "ax",
+                AsmType::Byte => "al",
+            },
+            Reg::Rbx => match reg_type {
+                AsmType::Qword => "rbx",
+                AsmType::Dword => "ebx",
+                AsmType::Word => "bx",
+                AsmType::Byte => "bl",
+            },
+            Reg::Rcx => match reg_type {
+                AsmType::Qword => "rcx",
+                AsmType::Dword => "ecx",
+                AsmType::Word => "cx",
+                AsmType::Byte => "cl",
+            },
+            Reg::Rdx => match reg_type {
+                AsmType::Qword => "rdx",
+                AsmType::Dword => "edx",
+                AsmType::Word => "dx",
+                AsmType::Byte => "dl",
+            },
+            Reg::Rsi => match reg_type {
+                AsmType::Qword => "rsi",
+                AsmType::Dword => "esi",
+                AsmType::Word => "si",
+                AsmType::Byte => "sil",
+            },
+            Reg::Rdi => match reg_type {
+                AsmType::Qword => "rdi",
+                AsmType::Dword => "edi",
+                AsmType::Word => "di",
+                AsmType::Byte => "dil",
+            }
+            // TODO : add all the variants of these
+            Reg::R8 => match reg_type {
+                AsmType::Qword => "r8",
+                _ => todo!(),
+            },
+            Reg::R9 => match reg_type {
+                AsmType::Qword => "r9",
+                _ => todo!(),
+            },
+            Reg::R10 => match reg_type {
+                AsmType::Qword => "r10",
+                _ => todo!(),
+            }
+            Reg::R11 => match reg_type {
+                AsmType::Qword => "r11",
+                _ => todo!(),
+            }
+            Reg::R12 => match reg_type {
+                AsmType::Qword => "r12",
+                _ => todo!(),
+            }
+            Reg::R13 => match reg_type {
+                AsmType::Qword => "r13",
+                _ => todo!(),
+            }
+            Reg::R14 => match reg_type {
+                AsmType::Qword => "r14",
+                _ => todo!(),
+            }
+            Reg::R15 => match reg_type {
+                AsmType::Qword => "r15",
+                _ => todo!(),
+            }
+            Reg::Rbp => match reg_type {
+                AsmType::Qword => "rbp",
+                _ => todo!(),
+            }
+            Reg::Rsp => match reg_type {
+                AsmType::Qword => "rsp",
+                _ => todo!(),
+            }
             Reg::Count => unreachable!(),
         }
     }
@@ -53,9 +121,9 @@ const ASM_TEMPLATE : &str = "
     .text
 ";
 
-struct Var {
-    var_type: Type,
-    stack_offset : u32,
+pub(crate) struct Var {
+    pub var_type: Type,
+    stack_offset : Option<u32>,
 }
 
 struct CodegenContext {
@@ -64,6 +132,7 @@ struct CodegenContext {
     used_regs : [bool; Reg::Count as usize], // TODO : better reg allocation
     vars : FxHashMap<String, Var>,
     current_stack_offset : u32,
+    current_fun_return_type : Type,
 }
 
 const fn init_used_regs() -> [bool; Reg::Count as usize] {
@@ -81,6 +150,7 @@ impl CodegenContext {
             used_regs: init_used_regs(),
             vars: FxHashMap::default(),
             current_stack_offset : 0,
+            current_fun_return_type: Type::Int, // unused value
         }
     }
 
@@ -104,12 +174,14 @@ impl CodegenContext {
         };
         let reg_idx = reg as usize;
         self.used_regs[reg_idx] = false;
-        
     }
 
     fn get_var_stack_offset(&mut self, size : u32) -> u32 {
         self.current_stack_offset += size;
         self.current_stack_offset
+    }
+    fn reset_stack_offset(&mut self){
+        self.current_stack_offset = 0;
     }
 }
 
@@ -131,7 +203,7 @@ impl MemAddr {
                 } else {
                     '+'
                 };
-                write!(s, "[{}{}{}]", reg.to_addressing_str(), sign, off.abs()).unwrap();
+                write!(s, "[{}{}{}]", reg.to_addressing_str(AsmType::Qword), sign, off.abs()).unwrap();
             }
         }
     }
@@ -144,16 +216,16 @@ enum WriteVal {
 }
 
 impl WriteVal {
-    fn to_addressing_str(self, s : &mut String){
+    fn to_addressing_str(self, s : &mut String, reg_type : AsmType){
         s.clear();
         match self {
-            WriteVal::Reg(reg) => s.push_str(reg.to_addressing_str()),
+            WriteVal::Reg(reg) => s.push_str(reg.to_addressing_str(reg_type)),
             WriteVal::Mem(mem_addr) => mem_addr.to_addressing_str(s),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Value {
     Reg(Reg),
     Mem(MemAddr),
@@ -161,12 +233,12 @@ enum Value {
 }
 
 impl Value {
-    fn to_addressing_str(self, s : &mut String){
+    fn to_addressing_str(self, s : &mut String, reg_type : AsmType){
         s.clear();
         match self {
             Value::Constant(nb) => write!(s, "{}", nb).unwrap(),
-            Value::Reg(reg) => WriteVal::Reg(reg).to_addressing_str(s),
-            Value::Mem(mem) => WriteVal::Mem(mem).to_addressing_str(s),
+            Value::Reg(reg) => WriteVal::Reg(reg).to_addressing_str(s, reg_type),
+            Value::Mem(mem) => WriteVal::Mem(mem).to_addressing_str(s, reg_type),
         }
     }
 
@@ -185,7 +257,7 @@ impl Value {
                 // TODO : spill to memory if no reg left
                 let reg = codegen_context.next_reg().unwrap();
                 let write_val = WriteVal::Reg(reg);
-                emit_mov(codegen_context, write_val, self, MovType::Qword); // TODO : change the movtype ?
+                emit_mov(codegen_context, write_val, self, AsmType::Qword); // TODO : change the movtype ?
                 write_val
             }
         }
@@ -207,34 +279,38 @@ impl From<WriteVal> for Value {
     }
 }
 
-fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &'static str, to : WriteVal, from : Value){
-    to.to_addressing_str(&mut codegen_context.value_buf);
+fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &'static str, to : WriteVal, from : Value, reg_type : AsmType){
+    to.to_addressing_str(&mut codegen_context.value_buf, reg_type);
     write!(&mut codegen_context.asm_out, "\t{} {}, ", instruction, codegen_context.value_buf).unwrap();
-    from.to_addressing_str(&mut codegen_context.value_buf);
+    from.to_addressing_str(&mut codegen_context.value_buf, reg_type);
     writeln!(&mut codegen_context.asm_out, "{}", codegen_context.value_buf).unwrap();
 }
 
-enum MovType {
+#[derive(Debug, Clone, Copy)]
+enum AsmType {
     Byte,
     Word,
     Dword,
     Qword,
 }
 
-fn emit_mov(codegen_context : &mut CodegenContext, to : WriteVal, from : Value, mov_type : MovType){
+fn emit_mov(codegen_context : &mut CodegenContext, to : WriteVal, from : Value, reg_type : AsmType){
     // no need for mov from one reg to the same reg
     if let Some(write_val) = from.as_write_val() && write_val == to {
         return;
     }
+    
     let mut instruction = "mov";
     // TODO : improve this
     if matches!(to, WriteVal::Mem(_)){
-        instruction = match mov_type {
-            MovType::Dword => "mov dword ptr",
+        instruction = match reg_type {
+            AsmType::Dword => {
+                "mov dword ptr"
+            },
             _ => todo!(),
         };
     }
-    emit_binary_instr(codegen_context, instruction, to, from);
+    emit_binary_instr(codegen_context, instruction, to, from, reg_type);
 }
 
 
@@ -243,12 +319,15 @@ fn codegen_number(nb : u128) -> Value {
     Value::Constant(nb)
 }
 
+// TODO : need to add the type conversions (for ex when adding a constant that has been put in a 64 bit reg and a 32 bit add with a var)
+
 // TODO : register allocation
 
-fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinOp, rhs : &ExprAst) -> Value {
+fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinOp, rhs : &ExprAst, expr_type : &Type) -> Value {
     let mut lhs_val = codegen_expr(codegen_context, lhs);
     let mut rhs_val = codegen_expr(codegen_context, rhs);
     match (lhs_val, rhs_val){
+        // TODO : add also mem
         (Value::Constant(_), Value::Reg(_)) => {
             mem::swap(&mut lhs_val, &mut rhs_val);
         }
@@ -262,24 +341,85 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
         BinOp::Mult => "imul",
         BinOp::Div => "idiv",
     };
-    emit_binary_instr(codegen_context, instruction, res_write_val, rhs_val);
+
+    let reg_type = asm_type_from_type(expr_type);
+    emit_binary_instr(codegen_context, instruction, res_write_val, rhs_val, reg_type);
     
     codegen_context.unused_value(rhs_val);
 
     res_write_val.into()
 }
 
+fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Value {
+    let reg = codegen_context.next_reg().unwrap();
+    let stack_offset = codegen_context.vars.get(var_name).unwrap().stack_offset.unwrap();
+    let mov_type = AsmType::Dword; // TODO
+    emit_mov(codegen_context, WriteVal::Reg(reg), Value::Mem(MemAddr::Offset { reg: Reg::Rbp, off: -(stack_offset as i32) }), mov_type);
+    Value::Reg(reg)
+}
+
+fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, args : &[ExprAst]) -> Value {
+    let ret_type = *fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
+    let asm_ret_type = asm_type_from_type(&ret_type);
+    let mut args_values = args.iter().map(|arg| codegen_expr(codegen_context, arg)).collect::<Vec<_>>();
+    let args_asm_types = args.iter().map(|arg| arg.get_type(&codegen_context.vars)).map(|arg_type| asm_type_from_type(&arg_type)).collect::<Vec<_>>();
+
+    // TODO : make used the args regs ? to not have to move them then ?
+    let regs_used = ARG_REGS.iter().take(args.len()).copied();
+    for (reg_idx, reg) in regs_used.enumerate() {
+        if let Some(pos) = args_values.iter().position(|e| e == &Value::Reg(reg)){
+            if reg == ARG_REGS[reg_idx] {
+                continue;
+            }
+            let replacement_reg = codegen_context.next_reg().unwrap();
+            emit_mov(codegen_context, WriteVal::Reg(replacement_reg), Value::Reg(reg), args_asm_types[pos]);
+            args_values[pos] = Value::Reg(replacement_reg);
+            codegen_context.unused_value(Value::Reg(reg));
+        }
+    }
+
+    if let Some(pos) = args_values.iter().position(|e| e == &Value::Reg(Reg::Rax)){
+        let replacement_reg = codegen_context.next_reg().unwrap();
+        emit_mov(codegen_context, WriteVal::Reg(replacement_reg), Value::Reg(Reg::Rax), asm_ret_type);
+        args_values[pos] = Value::Reg(replacement_reg);
+    }
+
+    for (arg_idx, &arg) in args_values.iter().enumerate() {
+        emit_mov(codegen_context, WriteVal::Reg(ARG_REGS[arg_idx]), arg, args_asm_types[arg_idx]);
+    }
+
+    match fun {
+        ExprAst::VarUse(fun_name) => {
+            writeln!(codegen_context.asm_out, "\tcall {}", fun_name).unwrap();
+        }
+        _ => todo!(), // TODO : indirect call (need to put the function pointer in a reg)
+    }
+    codegen_context.used_regs[Reg::Rax as usize] = true;
+    for arg in args_values {
+        codegen_context.unused_value(arg);
+    }
+
+    Value::Reg(Reg::Rax)
+}
+
 fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Value {
     match ast {
         ExprAst::Number(nb) => codegen_number(*nb),
-        ExprAst::BinOp { lhs, op, rhs } => codegen_binop(codegen_context, lhs.as_ref(), *op, rhs.as_ref()),
-        _ => panic!("Unknown ast node : {:?}", ast),
+        ExprAst::VarUse(var_name) => codegen_var_use(codegen_context, var_name),
+        ExprAst::BinOp { lhs, op, rhs } => {
+            let expr_type = ast.get_type(&codegen_context.vars);
+            codegen_binop(codegen_context, lhs.as_ref(), *op, rhs.as_ref(), &expr_type)
+        },
+        ExprAst::FunctionCall { fun, args } => {
+            codegen_function_call(codegen_context, fun.as_ref(), args)
+        }
+        //_ => panic!("Unknown ast node : {:?}", ast),
     }
 }
 
 fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) {
     let val = codegen_expr(codegen_context, val);
-    let mov_type = MovType::Dword; // TODO : change this
+    let mov_type = asm_type_from_type(&codegen_context.current_fun_return_type);
     emit_mov(codegen_context, WriteVal::Reg(Reg::Rax), val, mov_type);
     codegen_context.asm_out.push_str(FUN_EPILOGUE);
     codegen_context.asm_out.push_str("\tret\n"); // TODO : have a method on a new type for the tab
@@ -287,13 +427,19 @@ fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) {
 
 fn type_size(var_type : &Type) -> u32 {
     match var_type {
+        Type::Char => 1,
+        Type::Short => 2,
         Type::Int => 4,
+        Type::Long | Type::Function(_) => 8,
     }
 }
 
-fn mov_type_from_type(t : &Type) -> MovType {
+fn asm_type_from_type(t : &Type) -> AsmType {
     match t {
-        Type::Int => MovType::Dword,
+        Type::Char => AsmType::Byte,
+        Type::Short => AsmType::Word,
+        Type::Int => AsmType::Dword,
+        Type::Long | Type::Function(_) => AsmType::Qword,
     }
 }
 
@@ -305,11 +451,12 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
     let stack_offset = codegen_context.get_var_stack_offset(type_size);
     codegen_context.vars.insert(name.to_string(), Var { 
         var_type: var_type.clone(), 
-        stack_offset,
+        stack_offset: Some(stack_offset),
     });
     let var_mem = WriteVal::Mem(MemAddr::Offset { reg: Reg::Rbp, off: -(stack_offset as i32) });
-    let mov_type = mov_type_from_type(var_type);
+    let mov_type = asm_type_from_type(var_type);
     emit_mov(codegen_context, var_mem, val, mov_type);
+    codegen_context.unused_value(val);
 }
 
 fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst){
@@ -322,25 +469,76 @@ fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst)
     };
 }
 
+// TODO : omit the function prelude and epilogue if functions don't call any other functions and use no vars
+
 const FUN_PRELUDE : &str = "    push rbp
     mov rbp, rsp
 ";
 
 const FUN_EPILOGUE : &str = "\tpop rbp\n";
 
+const ARG_REGS: &[Reg] = &[
+    Reg::Rdi,
+    Reg::Rsi,
+    Reg::Rdx,
+    Reg::Rcx,
+    Reg::R8,
+    Reg::R9,
+];
+
+const MAX_ARGS : usize = ARG_REGS.len();
+
 // TODO : add .type	[FUNCTION NAME], @function and add .size [FUNCTION NAME], .-[FUNCTION NAME] like in gcc
-fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[StatementAst], return_type : &Type){
+fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[StatementAst], return_type : &Type, args : &[Arg]){
+    if args.len() > MAX_ARGS {
+        panic!("too much args"); // TODO : remove maximum (pass on the stack ? see amd64 c abi)
+    }
+    codegen_context.current_fun_return_type = return_type.clone();
     writeln!(&mut codegen_context.asm_out, "\t.globl	{}", name).unwrap();
     writeln!(&mut codegen_context.asm_out, "{}:", name).unwrap();
     codegen_context.asm_out.push_str(FUN_PRELUDE);
+    codegen_context.used_regs = init_used_regs();
+
+    // TODO : replace this vec with a smallvec ? (after removing maximum of args)
+    let mut stack_offsets = ArrayVec::<u32, 6>::new();
+    for arg in args {
+        let var_size = type_size(&arg.arg_type);
+        let stack_offset = codegen_context.get_var_stack_offset(var_size);
+        stack_offsets.push(stack_offset);
+        codegen_context.vars.insert(arg.name.clone(), Var { 
+            var_type: arg.arg_type.clone(), 
+            stack_offset: Some(stack_offset),
+        });
+    }
+
+    for arg_idx in 0..args.len(){
+        let reg_arg = ARG_REGS[arg_idx];
+        let reg_stack_offset = stack_offsets[arg_idx];
+        let mem_addr = MemAddr::Offset { reg: Reg::Rbp, off: -(reg_stack_offset as i32) };
+        let arg_type = &args[arg_idx].arg_type;
+        let mov_type = asm_type_from_type(arg_type);
+        emit_mov(codegen_context, WriteVal::Mem(mem_addr), Value::Reg(reg_arg), mov_type);
+    }
+
     for statement in body {
         codegen_statement(codegen_context, statement);
     }
+
+    for arg in args {
+        codegen_context.vars.remove(&arg.name);
+    }
+    codegen_context.reset_stack_offset();
+
+    let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Vec<_>>();
+    codegen_context.vars.insert(name.to_string(), Var { var_type: Type::Function(FunctionType {
+        ret_type: Box::new(return_type.clone()),
+        args_type,
+    }), stack_offset: None });
 }
 
 fn codegen_toplevel(codegen_context : &mut CodegenContext, top_level_ast : &TopLevelAst){
     match top_level_ast {
-        TopLevelAst::Function { name, body, return_type } => codegen_function(codegen_context, name, body, return_type),
+        TopLevelAst::Function { name, body, return_type, args } => codegen_function(codegen_context, name, body, return_type, args),
     }
 }
 
