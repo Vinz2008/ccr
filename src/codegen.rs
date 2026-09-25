@@ -3,7 +3,7 @@ use std::{fmt::Write as _, fs::File, io::Write as _, mem};
 use arrayvec::ArrayVec;
 use rustc_hash::FxHashMap;
 
-use crate::{lexer::{BinOp, FunctionType, Type}, parser::{Arg, ExprAst, StatementAst, TopLevelAst}};
+use crate::{lexer::BinOp, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
@@ -68,7 +68,6 @@ impl Reg {
                 AsmType::Word => "di",
                 AsmType::Byte => "dil",
             }
-            // TODO : add all the variants of these
             Reg::R8 => match reg_type {
                 AsmType::Qword => "r8",
                 AsmType::Dword => "r8d",
@@ -95,27 +94,39 @@ impl Reg {
             }
             Reg::R12 => match reg_type {
                 AsmType::Qword => "r12",
-                _ => todo!(),
+                AsmType::Dword => "r12d",
+                AsmType::Word => "r12w",
+                AsmType::Byte => "r12b",
             }
             Reg::R13 => match reg_type {
                 AsmType::Qword => "r13",
-                _ => todo!(),
+                AsmType::Dword => "r13d",
+                AsmType::Word => "r13w",
+                AsmType::Byte => "r13b",
             }
             Reg::R14 => match reg_type {
                 AsmType::Qword => "r14",
-                _ => todo!(),
+                AsmType::Dword => "r14d",
+                AsmType::Word => "r14w",
+                AsmType::Byte => "r14b"
             }
             Reg::R15 => match reg_type {
                 AsmType::Qword => "r15",
-                _ => todo!(),
+                AsmType::Dword => "r15d",
+                AsmType::Word => "r15w",
+                AsmType::Byte => "r15b",
             }
             Reg::Rbp => match reg_type {
                 AsmType::Qword => "rbp",
-                _ => todo!(),
+                AsmType::Dword => "ebp",
+                AsmType::Word => "bp",
+                AsmType::Byte => "bpl",
             }
             Reg::Rsp => match reg_type {
                 AsmType::Qword => "rsp",
-                _ => todo!(),
+                AsmType::Dword => "esp",
+                AsmType::Word => "sp",
+                AsmType::Byte => "spl",
             }
             Reg::Count => unreachable!(),
         }
@@ -367,7 +378,7 @@ fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Va
 // TODO : save register that need to be saved when called (and restored after), also save registers at the prologue, epilogue of function that need to be saved https://s-mazigh.github.io/ASMx86_64/x86_64-LesBases.html
 
 fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, args : &[ExprAst]) -> Value {
-    let ret_type = *fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
+    let ret_type = fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
     let asm_ret_type = asm_type_from_type(&ret_type);
     let mut args_values = args.iter().map(|arg| codegen_expr(codegen_context, arg)).collect::<Vec<_>>();
     let args_asm_types = args.iter().map(|arg| arg.get_type(&codegen_context.vars)).map(|arg_type| asm_type_from_type(&arg_type)).collect::<Vec<_>>();
@@ -538,10 +549,10 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
     codegen_context.reset_stack_offset();
 
     let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Box<[_]>>();
-    codegen_context.vars.insert(name.to_string(), Var { var_type: Type::Function(FunctionType {
-        ret_type: Box::new(return_type.clone()),
+    codegen_context.vars.insert(name.to_string(), Var { var_type: Type::Function(Box::new(FunctionType {
+        ret_type: return_type.clone(),
         args_type,
-    }), stack_offset: None });
+    })), stack_offset: None });
 }
 
 fn codegen_toplevel(codegen_context : &mut CodegenContext, top_level_ast : &TopLevelAst){

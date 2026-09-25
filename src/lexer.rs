@@ -2,6 +2,8 @@ use std::{collections::VecDeque, iter::Peekable, str::Chars};
 
 use arrayvec::ArrayString;
 
+use crate::types::Type;
+
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum BinOp {
@@ -9,30 +11,6 @@ pub(crate) enum BinOp {
     Minus,
     Mult,
     Div,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
-pub(crate) struct FunctionType {
-    pub ret_type: Box<Type>,
-    pub args_type : Box<[Type]>,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
-pub(crate) enum Type {
-    Char,
-    Short,
-    Int,
-    Function(FunctionType),
-    Long,
-}
-
-impl Type {
-    pub(crate) fn into_function_type(self) -> Option<FunctionType> {
-        match self {
-            Type::Function(func_type) => Some(func_type),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

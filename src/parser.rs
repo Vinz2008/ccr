@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::lexer::{BinOp, Token, Type};
+use crate::{lexer::{BinOp, Token}, types::Type};
 
 // TODO : make it flat ? (is more optimized, but would complicated mutating it for peep hole opts)
 #[derive(Debug)]
