@@ -11,7 +11,16 @@ mod linker;
 
 // TODO : use a arena allocator
 fn main() {
-    let f = env::args().nth(1).expect("missing arg");
+    let mut should_link = true;
+    let mut f = None;
+    for arg in env::args(){
+        if arg == "-S" {
+            should_link = false;
+        } else {
+            f = Some(arg);
+        }
+    }
+    let f = f.expect("missing arg");
     let contents = fs::read_to_string(f).unwrap();
     let preprocessed_contents = preprocess(contents);
     let tokens = lex(&preprocessed_contents);
@@ -19,5 +28,7 @@ fn main() {
     let ast = parse(tokens);
     dbg!(&ast);
     codegen(ast);
-    link("out.s".as_ref());
+    if should_link {
+        link("out.s".as_ref());
+    }
 }
