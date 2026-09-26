@@ -8,5 +8,10 @@ int main(int argc){
     if (argc == 2){
         return 2;
     }
+    if (a == 4){
+        return 2;
+    } else {
+        b = b + 1;
+    }
     return b;
 }

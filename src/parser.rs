@@ -103,9 +103,10 @@ fn parse_function_call(tokens : &mut VecDeque<Token>) -> ExprAst {
 
 fn get_prec(binop : BinOp) -> u8 {
     match binop {
-        BinOp::Cmp => 1,
-        BinOp::Plus | BinOp::Minus => 2,
-        BinOp::Mult | BinOp::Div => 3,
+        BinOp::Equal => 1,
+        BinOp::Cmp => 2,
+        BinOp::Plus | BinOp::Minus => 3,
+        BinOp::Mult | BinOp::Div => 4,
     }
 }
 
@@ -144,7 +145,11 @@ fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> StatementAs
         _ => unreachable!(),
     };
 
-    eat_token(tokens, TokenTag::Equal);
+    // TODO : make the eat token a macro instead ? to have pattern matching ? or just have a helper eat_token_fun pass can be passed a closure to match the token
+    let equal_tok = pass_token(tokens);
+    if !matches!(equal_tok, Token::BinOp(BinOp::Equal)){
+        panic!("expected equal, got {:?}", equal_tok);
+    }
 
     let val = parse_expr(tokens);
 

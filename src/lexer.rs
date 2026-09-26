@@ -5,7 +5,7 @@ use enum_tag::EnumTag;
 
 use crate::types::Type;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub(crate) enum BinOp {
     Plus,
@@ -13,6 +13,7 @@ pub(crate) enum BinOp {
     Mult,
     Div,
     Cmp, // ==
+    Equal, // =
 }
 
 #[derive(Debug, Clone, EnumTag)]
@@ -25,8 +26,6 @@ pub(crate) enum Token {
     RightBrace, // }
     SemiColon, // ;
     Colon, // ,
-    // TODO : make the equal a binop
-    Equal, // =
     Return,
     If,
     Else,
@@ -77,10 +76,7 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
         "*" => BinOp::Mult,
         "/" => BinOp::Div,
         "==" => BinOp::Cmp,
-        "=" => {
-            single_char_tok(chars, tokens, Token::Equal);
-            return;
-        },
+        "=" => BinOp::Equal,
         "//" => {
             handle_comment(chars);
             return;
@@ -148,7 +144,6 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
             '}' => single_char_tok(&mut chars, &mut tokens, Token::RightBrace),
             ',' => single_char_tok(&mut chars, &mut tokens, Token::Colon),
             ';' => single_char_tok(&mut chars, &mut tokens, Token::SemiColon),
-            '=' => single_char_tok(&mut chars, &mut tokens, Token::Equal),
             '#' => lex_cpp_metadata(&mut chars),
             _ => panic!("Unknown token '{}'", c),
         }

@@ -373,9 +373,32 @@ fn codegen_number(nb : u128) -> Value {
 
 // TODO : codegen should be the last step, so why not pass owned ast to codegen ?
 
+fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &ExprAst, assign_type : &Type) -> Value {
+    // TODO : instead of this, just use a function that will be used for & to get the addr of an expr ?
+    let mem_addr = match lhs {
+        ExprAst::VarUse(var_ident) => {
+            let var = codegen_context.vars.get(var_ident.as_ref()).unwrap();
+            let stack_offset = var.stack_offset.unwrap();
+            mem_addr_from_stack_off(stack_offset)
+        },
+        _ => panic!("lvalue not implemented : {:?}", lhs),
+    };
+    let rhs = codegen_expr(codegen_context, rhs);
+
+    // TODO : do the mov
+    let asm_type = asm_type_from_type(assign_type);
+    emit_mov(codegen_context, WriteVal::Mem(mem_addr), rhs, asm_type);
+
+    rhs
+}
+
 // TODO : need to add the type conversions (for ex when adding a constant that has been put in a 64 bit reg and a 32 bit add with a var)
 
 fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinOp, rhs : &ExprAst, expr_type : &Type) -> Value {
+    if op == BinOp::Equal {
+        return codegen_assign(codegen_context, lhs, rhs, expr_type);
+    }
+
     let mut lhs_val = codegen_expr(codegen_context, lhs);
     let mut rhs_val = codegen_expr(codegen_context, rhs);
     match (lhs_val, rhs_val){
@@ -394,6 +417,7 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
         BinOp::Mult => "imul",
         BinOp::Div => "idiv",
         BinOp::Cmp => "cmp",
+        BinOp::Equal => unreachable!(),
     };
 
     let reg_type = asm_type_from_type(expr_type);
@@ -419,7 +443,7 @@ fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Va
     let stack_offset = var.stack_offset.unwrap();
     let var_type = &var.var_type;
     let mov_type = asm_type_from_type(var_type);
-    emit_mov(codegen_context, WriteVal::Reg(reg), Value::Mem(MemAddr::Offset { reg: Reg::Rbp, off: -(stack_offset as i32) }), mov_type);
+    emit_mov(codegen_context, WriteVal::Reg(reg), Value::Mem(mem_addr_from_stack_off(stack_offset)), mov_type);
     Value::Reg(reg)
 }
 
@@ -529,6 +553,10 @@ fn asm_type_from_type(t : &Type) -> AsmType {
     }
 }
 
+fn mem_addr_from_stack_off(stack_offset : u32) -> MemAddr {
+    MemAddr::Offset { reg: Reg::Rbp, off: -(stack_offset as i32) }
+}
+
 fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type : &Type, val : &ExprAst){
     // TODO : add real scopes support (to reuse stack vars)
 
@@ -539,7 +567,7 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
         var_type: var_type.clone(), 
         stack_offset: Some(stack_offset),
     });
-    let var_mem = WriteVal::Mem(MemAddr::Offset { reg: Reg::Rbp, off: -(stack_offset as i32) });
+    let var_mem = WriteVal::Mem(mem_addr_from_stack_off(stack_offset));
     let mov_type = asm_type_from_type(var_type);
     emit_mov(codegen_context, var_mem, val, mov_type);
     codegen_context.unused_value(val);
@@ -547,24 +575,44 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
 
 fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &[StatementAst], else_body : Option<&[StatementAst]>){
     let condition_val = codegen_expr(codegen_context, condition);
-    // TODO : add the else
-    if else_body.is_some(){
-        panic!()
-    }
+
     
     let condition_write_val = condition_val.into_write_val(codegen_context);
     emit_binary_instr(codegen_context, "cmp", condition_write_val, Value::Constant(0), AsmType::Dword);
     
-    
     let if_idx = codegen_context.next_idx();
-    let end_label = codegen_context.next_label_str();
-    writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
-    writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
-    for statement in if_body {
-        codegen_statement(codegen_context, statement);
+    
+
+    // TODO : merge the code in the if and else here
+    if let Some(else_body) = else_body {
+        let else_label = codegen_context.next_label_str();
+        let end_label = codegen_context.next_label_str();
+        writeln!(codegen_context.asm_out, "\tjz {}", else_label).unwrap();
+        writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
+        for statement in if_body {
+            codegen_statement(codegen_context, statement);
+        }
+        writeln!(codegen_context.asm_out, "\tjmp {}", end_label).unwrap();
+
+        
+        writeln!(codegen_context.asm_out, "# else body {}", if_idx).unwrap();
+        writeln!(codegen_context.asm_out, "{}:", else_label).unwrap();
+        for statement in else_body {
+            codegen_statement(codegen_context, statement);
+        }
+
+        writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
+        writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    } else {
+        let end_label = codegen_context.next_label_str();
+        writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
+        writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
+        for statement in if_body {
+            codegen_statement(codegen_context, statement);
+        }
+        writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
+        writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
     }
-    writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
-    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
     codegen_context.unused_value(condition_val);
 }
 
@@ -642,7 +690,7 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
     for arg_idx in 0..args.len(){
         let reg_arg = ARG_REGS[arg_idx];
         let reg_stack_offset = stack_offsets[arg_idx];
-        let mem_addr = MemAddr::Offset { reg: Reg::Rbp, off: -(reg_stack_offset as i32) };
+        let mem_addr = mem_addr_from_stack_off(reg_stack_offset);
         let arg_type = &args[arg_idx].arg_type;
         let mov_type = asm_type_from_type(arg_type);
         emit_mov(codegen_context, WriteVal::Mem(mem_addr), Value::Reg(reg_arg), mov_type);

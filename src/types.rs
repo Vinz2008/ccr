@@ -2,7 +2,7 @@ use std::cmp;
 
 use rustc_hash::FxHashMap;
 
-use crate::{codegen::Var, parser::ExprAst};
+use crate::{codegen::Var, lexer::BinOp, parser::ExprAst};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub(crate) struct FunctionType {
@@ -43,11 +43,17 @@ fn guess_lit_nb_type(nb : u128) -> Type {
     }
 }
 
-fn get_binop_type(lhs : &ExprAst, rhs : &ExprAst, vars : &FxHashMap<String, Var>) -> Type {
-    let lhs_type = lhs.get_type(vars);
-    let rhs_type = rhs.get_type(vars);
-    let max_type_size = cmp::max(rhs_type, lhs_type);
-    cmp::max(max_type_size, Type::Int)
+fn get_binop_type(lhs : &ExprAst, binop : BinOp, rhs : &ExprAst, vars : &FxHashMap<String, Var>) -> Type {
+    match binop {
+        BinOp::Cmp => Type::Int,
+        BinOp::Equal => rhs.get_type(vars),
+        _ => {
+            let lhs_type = lhs.get_type(vars);
+            let rhs_type = rhs.get_type(vars);
+            let max_type_size = cmp::max(rhs_type, lhs_type);
+            cmp::max(max_type_size, Type::Int)
+        }
+    }
 }
 
 fn get_function_call_type(fun : &ExprAst, vars : &FxHashMap<String, Var>) -> Type {
@@ -60,7 +66,7 @@ impl ExprAst {
         match self {
             ExprAst::Number(nb) => guess_lit_nb_type(*nb),
             ExprAst::VarUse(ident) => vars.get(ident.as_ref()).unwrap().var_type.clone(),
-            ExprAst::BinOp { lhs, op: _, rhs } => get_binop_type(lhs.as_ref(), rhs.as_ref(), vars),
+            ExprAst::BinOp { lhs, op, rhs } => get_binop_type(lhs.as_ref(), *op, rhs.as_ref(), vars),
             ExprAst::FunctionCall { fun, args: _ } => get_function_call_type(fun.as_ref(), vars),
         }
     }
