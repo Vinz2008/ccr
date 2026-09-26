@@ -16,6 +16,8 @@ pub(crate) enum BinOp {
     Equal, // =
 }
 
+// TODO : for the equal operator, implement the right associativity of operators
+
 #[derive(Debug, Clone, EnumTag)]
 pub(crate) enum Token {
     Number(u128),
