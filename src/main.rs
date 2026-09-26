@@ -1,12 +1,13 @@
 use std::{env, fs};
 
-use crate::{codegen::codegen, lexer::lex, parser::parse, preprocessor::preprocess};
+use crate::{codegen::codegen, lexer::lex, linker::link, parser::parse, preprocessor::preprocess};
 
 mod preprocessor;
 mod lexer;
 mod parser;
 mod types;
 mod codegen;
+mod linker;
 
 // TODO : use a arena allocator
 fn main() {
@@ -18,4 +19,5 @@ fn main() {
     let ast = parse(tokens);
     dbg!(&ast);
     codegen(ast);
+    link("out.s".as_ref());
 }

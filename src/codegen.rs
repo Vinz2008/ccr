@@ -317,14 +317,6 @@ impl From<WriteVal> for Value {
     }
 }
 
-// TODO : make it more general
-fn widen_byte_to_dword(codegen_context : &mut CodegenContext, val : WriteVal){
-    val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Dword);
-    write!(&mut codegen_context.asm_out, "\tmovzx {}, ", codegen_context.value_buf).unwrap();
-    val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Byte);
-    writeln!(&mut codegen_context.asm_out, "{}", codegen_context.value_buf).unwrap();
-}
-
 fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &'static str, to : WriteVal, from : Value, reg_type : AsmType){
     to.to_addressing_str(&mut codegen_context.value_buf, reg_type);
     write!(&mut codegen_context.asm_out, "\t{} {}, ", instruction, codegen_context.value_buf).unwrap();
@@ -338,7 +330,7 @@ fn emit_single_op_instr(codegen_context : &mut CodegenContext, instruction : &'s
     writeln!(&mut codegen_context.asm_out, "\t{} {}", instruction, codegen_context.value_buf).unwrap();
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum AsmType {
     Byte,
     Word,
@@ -371,6 +363,11 @@ fn codegen_number(nb : u128) -> Value {
     Value::Constant(nb)
 }
 
+fn codegen_char(c : char) -> Value {
+    let c : u8 = c.try_into().expect("too big char literal (unicode)");
+    Value::Constant(c as i32)
+}
+
 // TODO : codegen should be the last step, so why not pass owned ast to codegen ?
 
 fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &ExprAst, assign_type : &Type) -> Value {
@@ -394,6 +391,25 @@ fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &
 
 // TODO : need to add the type conversions (for ex when adding a constant that has been put in a 64 bit reg and a 32 bit add with a var)
 
+// TODO : make it more general
+
+fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type, to : &Type) -> Value {
+    if from == to {
+        return val;
+    }
+    match (from, to){
+        (Type::Char, Type::Int) => {
+            let write_val = val.into_write_val(codegen_context);
+            write_val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Dword);
+            write!(&mut codegen_context.asm_out, "\tmovzx {}, ", codegen_context.value_buf).unwrap();
+            write_val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Byte);
+            writeln!(&mut codegen_context.asm_out, "{}", codegen_context.value_buf).unwrap();
+            write_val.into()
+        }
+        _ => todo!()
+    }
+}
+
 fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinOp, rhs : &ExprAst, expr_type : &Type) -> Value {
     if op == BinOp::Equal {
         return codegen_assign(codegen_context, lhs, rhs, expr_type);
@@ -410,7 +426,7 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
     }
 
     // TODO : do I need special handling for the output of some of these (is it always the same as the lhs ?)
-    let res_write_val = lhs_val.into_write_val(codegen_context);
+    let mut res_write_val = lhs_val.into_write_val(codegen_context);
     let instruction = match op {
         BinOp::Plus => "add",
         BinOp::Minus => "sub",
@@ -427,7 +443,7 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
     match op {
         BinOp::Cmp => {
             emit_single_op_instr(codegen_context, "sete", res_write_val.into(), AsmType::Byte);
-            widen_byte_to_dword(codegen_context, res_write_val);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
         },
         _ => {},
     }
@@ -451,7 +467,17 @@ fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, 
     let ret_type = fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
     let asm_ret_type = asm_type_from_type(&ret_type);
     let mut args_values = args.iter().map(|arg| codegen_expr(codegen_context, arg)).collect::<Vec<_>>();
-    let args_asm_types = args.iter().map(|arg| arg.get_type(&codegen_context.vars)).map(|arg_type| asm_type_from_type(&arg_type)).collect::<Vec<_>>();
+    let args_types = args.iter().map(|arg| arg.get_type(&codegen_context.vars)).collect::<Vec<_>>();
+    let args_asm_types = args_types.iter().map(|arg_type| asm_type_from_type(arg_type)).collect::<Vec<_>>();
+
+    let proto_fun_type = match fun {
+        ExprAst::VarUse(fun_name) => {
+            codegen_context.vars.get(fun_name.as_ref()).unwrap().var_type.clone().into_function_type().unwrap()
+        }
+        _ => todo!(), // TODO
+    };
+    let proto_args_types = proto_fun_type.args_type;
+    let proto_args_asm_types = proto_args_types.iter().map(|arg_type| asm_type_from_type(arg_type)).collect::<Vec<_>>();
 
     // TODO : make used the args regs ? to not have to move them then ?
     let regs_used = ARG_REGS.iter().take(args.len()).copied();
@@ -473,8 +499,9 @@ fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, 
         args_values[pos] = Value::Reg(replacement_reg);
     }
 
-    for (arg_idx, &arg) in args_values.iter().enumerate() {
-        emit_mov(codegen_context, WriteVal::Reg(ARG_REGS[arg_idx]), arg, args_asm_types[arg_idx]);
+    for (arg_idx, arg) in args_values.iter_mut().enumerate() {
+        *arg = codegen_cast(codegen_context, *arg, &args_types[arg_idx], &proto_args_types[arg_idx]);
+        emit_mov(codegen_context, WriteVal::Reg(ARG_REGS[arg_idx]), *arg, proto_args_asm_types[arg_idx]);
     }
 
     // there is also rax, and the args reg, but they are moved if already used, so I need to save only these ones
@@ -511,6 +538,7 @@ fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, 
 fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Value {
     match ast {
         ExprAst::Number(nb) => codegen_number(*nb),
+        ExprAst::Char(c) => codegen_char(*c),
         ExprAst::VarUse(var_name) => codegen_var_use(codegen_context, var_name),
         ExprAst::BinOp { lhs, op, rhs } => {
             let expr_type = ast.get_type(&codegen_context.vars);
@@ -703,9 +731,18 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
     })), stack_offset: None });
 }
 
+fn codegen_func_proto(codegen_context : &mut CodegenContext, name : &str, return_type : &Type, args : &[Arg]){
+    let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Box<[_]>>();
+    codegen_context.vars.insert(name.to_string(), Var { var_type: Type::Function(Box::new(FunctionType {
+        ret_type: return_type.clone(),
+        args_type,
+    })), stack_offset: None });
+}
+
 fn codegen_toplevel(codegen_context : &mut CodegenContext, top_level_ast : &TopLevelAst){
     match top_level_ast {
         TopLevelAst::Function { name, body, return_type, args } => codegen_function(codegen_context, name, body, return_type, args),
+        TopLevelAst::FuncProto { name, args, return_type } => codegen_func_proto(codegen_context, name, return_type, args),
     }
 }
 

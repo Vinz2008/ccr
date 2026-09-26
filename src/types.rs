@@ -65,6 +65,7 @@ impl ExprAst {
         // TODO : need special handling here for the unary expr - and a static number (if found u32 and then need -, then it becomes a i64 ? check this)
         match self {
             ExprAst::Number(nb) => guess_lit_nb_type(*nb),
+            ExprAst::Char(_) => Type::Char,
             ExprAst::VarUse(ident) => vars.get(ident.as_ref()).unwrap().var_type.clone(),
             ExprAst::BinOp { lhs, op, rhs } => get_binop_type(lhs.as_ref(), *op, rhs.as_ref(), vars),
             ExprAst::FunctionCall { fun, args: _ } => get_function_call_type(fun.as_ref(), vars),

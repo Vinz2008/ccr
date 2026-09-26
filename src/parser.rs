@@ -8,6 +8,7 @@ use crate::{lexer::{BinOp, Token, TokenTag}, types::Type};
 #[derive(Debug)]
 pub(crate) enum ExprAst {
     Number(u128),
+    Char(char),
     BinOp {
         lhs : Box<ExprAst>,
         op : BinOp,
@@ -53,6 +54,11 @@ pub(crate) enum TopLevelAst {
         args : Vec<Arg>,
         body: Vec<StatementAst>,
         return_type : Type,
+    },
+    FuncProto {
+        name: String,
+        args : Vec<Arg>,
+        return_type : Type,
     }
 }
 
@@ -75,6 +81,7 @@ fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
     match t {
         Token::Number(nb) => ExprAst::Number(nb),
         Token::Identifier(ident) => ExprAst::VarUse(ident.into_boxed_str()),
+        Token::Char(c) => ExprAst::Char(c),
         _ => panic!("Unknown token {:?}", t),
     }
 }
@@ -188,7 +195,7 @@ fn parse_if(tokens : &mut VecDeque<Token>) -> StatementAst {
     StatementAst::If { 
         condition, 
         if_body: if_body.into_boxed_slice(), 
-        else_body: else_body, 
+        else_body, 
     }
 }
 
@@ -253,7 +260,20 @@ fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst 
         args.push(Arg { name: arg_name, arg_type });
     }
     eat_token(tokens, TokenTag::RightParen);
-    eat_token(tokens, TokenTag::LeftBrace);
+    match tokens.front(){
+        Some(Token::SemiColon) => {
+            eat_token(tokens, TokenTag::SemiColon);
+            return TopLevelAst::FuncProto { 
+                name: ident_str,
+                return_type: t, 
+                args, 
+            };
+        }
+        Some(_) => {
+            eat_token(tokens, TokenTag::LeftBrace);
+        }
+        None => panic!("Unexpected end after proto"),
+    }
 
     let mut statements = Vec::new();
     while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {

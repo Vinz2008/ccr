@@ -22,6 +22,7 @@ pub(crate) enum BinOp {
 pub(crate) enum Token {
     Number(u128),
     BinOp(BinOp),
+    Char(char),
     LeftParen, // ( 
     RightParen, // )
     LeftBrace, // {
@@ -36,6 +37,8 @@ pub(crate) enum Token {
 }
 
 pub(crate) type TokenTag = <Token as EnumTag>::Tag;
+
+// TODO : add helper functions to eat a char while checking the char
 
 fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     let mut numbers = ArrayString::<19>::new();
@@ -126,6 +129,13 @@ fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
     handle_comment(chars);
 }
 
+fn lex_char_lit(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
+    chars.next().unwrap(); // eat '
+    let c = chars.next().unwrap();
+    tokens.push_back(Token::Char(c));
+    chars.next().unwrap(); // eat '
+}
+
 pub(crate) fn lex(s : &str) -> VecDeque<Token> {
     let mut chars = s.chars().peekable();
     let mut tokens = VecDeque::new();
@@ -147,6 +157,7 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
             ',' => single_char_tok(&mut chars, &mut tokens, Token::Colon),
             ';' => single_char_tok(&mut chars, &mut tokens, Token::SemiColon),
             '#' => lex_cpp_metadata(&mut chars),
+            '\'' => lex_char_lit(&mut chars, &mut tokens),
             _ => panic!("Unknown token '{}'", c),
         }
     }
