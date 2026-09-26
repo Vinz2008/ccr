@@ -581,38 +581,29 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
     emit_binary_instr(codegen_context, "cmp", condition_write_val, Value::Constant(0), AsmType::Dword);
     
     let if_idx = codegen_context.next_idx();
-    
-
-    // TODO : merge the code in the if and else here
-    if let Some(else_body) = else_body {
-        let else_label = codegen_context.next_label_str();
-        let end_label = codegen_context.next_label_str();
-        writeln!(codegen_context.asm_out, "\tjz {}", else_label).unwrap();
-        writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
-        for statement in if_body {
-            codegen_statement(codegen_context, statement);
-        }
-        writeln!(codegen_context.asm_out, "\tjmp {}", end_label).unwrap();
-
-        
-        writeln!(codegen_context.asm_out, "# else body {}", if_idx).unwrap();
-        writeln!(codegen_context.asm_out, "{}:", else_label).unwrap();
-        for statement in else_body {
-            codegen_statement(codegen_context, statement);
-        }
-
-        writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
-        writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
-    } else {
-        let end_label = codegen_context.next_label_str();
-        writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
-        writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
-        for statement in if_body {
-            codegen_statement(codegen_context, statement);
-        }
-        writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
-        writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    let if_false_label = codegen_context.next_label_str();
+    writeln!(codegen_context.asm_out, "\tjz {}", if_false_label).unwrap();
+    writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
+    for statement in if_body {
+        codegen_statement(codegen_context, statement);
     }
+    let end_label = match else_body {
+        Some(else_body)=> {
+            let else_label = if_false_label;
+            let end_label = codegen_context.next_label_str();
+            writeln!(codegen_context.asm_out, "\tjmp {}", end_label).unwrap();
+            
+            writeln!(codegen_context.asm_out, "# else body {}", if_idx).unwrap();
+            writeln!(codegen_context.asm_out, "{}:", else_label).unwrap();
+            for statement in else_body {
+                codegen_statement(codegen_context, statement);
+            }
+            end_label
+        }
+        None => if_false_label,
+    };
+    writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
+    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
     codegen_context.unused_value(condition_val);
 }
 
