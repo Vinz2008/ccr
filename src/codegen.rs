@@ -1,6 +1,6 @@
 use std::{fmt::Write as _, fs::File, io::Write as _, mem};
 
-use arrayvec::ArrayVec;
+use arrayvec::{ArrayString, ArrayVec};
 use rustc_hash::FxHashMap;
 
 use crate::{lexer::BinOp, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
@@ -150,6 +150,7 @@ struct CodegenContext {
     vars : FxHashMap<String, Var>,
     current_stack_offset : u32,
     current_fun_return_type : Type,
+    next_idx : u32,
 }
 
 const fn init_used_regs() -> [bool; Reg::Count as usize] {
@@ -158,6 +159,9 @@ const fn init_used_regs() -> [bool; Reg::Count as usize] {
     used_regs[Reg::Rsp as usize] = true;
     used_regs
 }
+
+const LABEL_PREFIX : &str = ".LBB";
+const LABEL_MAX_SIZE : usize = LABEL_PREFIX.len() + 10;
 
 impl CodegenContext {
     fn new() -> CodegenContext {
@@ -168,6 +172,7 @@ impl CodegenContext {
             vars: FxHashMap::default(),
             current_stack_offset : 0,
             current_fun_return_type: Type::Int, // unused value
+            next_idx: 0,
         };
         context.reset_stack_offset();
         context
@@ -184,6 +189,19 @@ impl CodegenContext {
             }
         }
         None
+    }
+
+    fn next_idx(&mut self) -> u32 {
+        let next = self.next_idx;
+        self.next_idx += 1;
+        next
+    }
+
+    fn next_label_str(&mut self) -> ArrayString<LABEL_MAX_SIZE> {
+        let mut label_str = ArrayString::<LABEL_MAX_SIZE>::new();
+        let label_idx = self.next_idx();
+        write!(&mut label_str, "{}{}", LABEL_PREFIX, label_idx).unwrap();
+        label_str
     }
 
     fn unused_value(&mut self, val : Value){
@@ -536,14 +554,16 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
     
     let condition_write_val = condition_val.into_write_val(codegen_context);
     emit_binary_instr(codegen_context, "cmp", condition_write_val, Value::Constant(0), AsmType::Dword);
-    // TODO : for these basic blocks, add an index for them, to not duplicate names
-    let end_label = ".LBB1";
+    
+    
+    let if_idx = codegen_context.next_idx();
+    let end_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
-    writeln!(codegen_context.asm_out, "# if body").unwrap();
+    writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
     for statement in if_body {
         codegen_statement(codegen_context, statement);
     }
-    writeln!(codegen_context.asm_out, "# after").unwrap();
+    writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
     writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
     codegen_context.unused_value(condition_val);
 }
