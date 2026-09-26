@@ -544,7 +544,8 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
         codegen_statement(codegen_context, statement);
     }
     writeln!(codegen_context.asm_out, "# after").unwrap();
-    writeln!(codegen_context.asm_out, "{}", end_label).unwrap();
+    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    codegen_context.unused_value(condition_val);
 }
 
 fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst){
