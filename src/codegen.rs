@@ -161,14 +161,16 @@ const fn init_used_regs() -> [bool; Reg::Count as usize] {
 
 impl CodegenContext {
     fn new() -> CodegenContext {
-        CodegenContext { 
+        let mut context = CodegenContext { 
             asm_out: String::from(ASM_TEMPLATE),
             value_buf : String::with_capacity(3),
             used_regs: init_used_regs(),
             vars: FxHashMap::default(),
             current_stack_offset : 0,
             current_fun_return_type: Type::Int, // unused value
-        }
+        };
+        context.reset_stack_offset();
+        context
     }
 
     fn next_reg(&mut self) -> Option<Reg> {
@@ -198,7 +200,8 @@ impl CodegenContext {
         self.current_stack_offset
     }
     fn reset_stack_offset(&mut self){
-        self.current_stack_offset = 0;
+        // TODO : change this after pushing seletively ?
+        self.current_stack_offset = (CALLEE_SAVED_REGS.len() * 8) as u32;
     }
 }
 
@@ -296,11 +299,25 @@ impl From<WriteVal> for Value {
     }
 }
 
+// TODO : make it more general
+fn widen_byte_to_dword(codegen_context : &mut CodegenContext, val : WriteVal){
+    val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Dword);
+    write!(&mut codegen_context.asm_out, "\tmovzx {}, ", codegen_context.value_buf).unwrap();
+    val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Byte);
+    writeln!(&mut codegen_context.asm_out, "{}", codegen_context.value_buf).unwrap();
+}
+
 fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &'static str, to : WriteVal, from : Value, reg_type : AsmType){
     to.to_addressing_str(&mut codegen_context.value_buf, reg_type);
     write!(&mut codegen_context.asm_out, "\t{} {}, ", instruction, codegen_context.value_buf).unwrap();
     from.to_addressing_str(&mut codegen_context.value_buf, reg_type);
     writeln!(&mut codegen_context.asm_out, "{}", codegen_context.value_buf).unwrap();
+}
+
+// for single operand instructions
+fn emit_single_op_instr(codegen_context : &mut CodegenContext, instruction : &'static str, operand : Value, reg_type : AsmType){
+    operand.to_addressing_str(&mut codegen_context.value_buf, reg_type);
+    writeln!(&mut codegen_context.asm_out, "\t{} {}", instruction, codegen_context.value_buf).unwrap();
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -336,6 +353,8 @@ fn codegen_number(nb : u128) -> Value {
     Value::Constant(nb)
 }
 
+// TODO : codegen should be the last step, so why not pass owned ast to codegen ?
+
 // TODO : need to add the type conversions (for ex when adding a constant that has been put in a 64 bit reg and a 32 bit add with a var)
 
 fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinOp, rhs : &ExprAst, expr_type : &Type) -> Value {
@@ -349,17 +368,28 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
         _ => {}
     }
 
+    // TODO : do I need special handling for the output of some of these (is it always the same as the lhs ?)
     let res_write_val = lhs_val.into_write_val(codegen_context);
     let instruction = match op {
         BinOp::Plus => "add",
         BinOp::Minus => "sub",
         BinOp::Mult => "imul",
         BinOp::Div => "idiv",
+        BinOp::Cmp => "cmp",
     };
 
     let reg_type = asm_type_from_type(expr_type);
     emit_binary_instr(codegen_context, instruction, res_write_val, rhs_val, reg_type);
     
+    // TODO : improve this code, so that when it is directly in a if condition, directly produce the jump
+    match op {
+        BinOp::Cmp => {
+            emit_single_op_instr(codegen_context, "sete", res_write_val.into(), AsmType::Byte);
+            widen_byte_to_dword(codegen_context, res_write_val);
+        },
+        _ => {},
+    }
+
     codegen_context.unused_value(rhs_val);
 
     res_write_val.into()
@@ -374,8 +404,6 @@ fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Va
     emit_mov(codegen_context, WriteVal::Reg(reg), Value::Mem(MemAddr::Offset { reg: Reg::Rbp, off: -(stack_offset as i32) }), mov_type);
     Value::Reg(reg)
 }
-
-// TODO : save register that need to be saved when called (and restored after), also save registers at the prologue, epilogue of function that need to be saved https://s-mazigh.github.io/ASMx86_64/x86_64-LesBases.html
 
 fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, args : &[ExprAst]) -> Value {
     let ret_type = fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
@@ -407,12 +435,29 @@ fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, 
         emit_mov(codegen_context, WriteVal::Reg(ARG_REGS[arg_idx]), arg, args_asm_types[arg_idx]);
     }
 
+    // there is also rax, and the args reg, but they are moved if already used, so I need to save only these ones
+    let caller_saved_regs = [
+        Reg::R10, Reg::R11,
+    ];
+
+    for reg in caller_saved_regs {
+        if codegen_context.used_regs[reg as usize] {
+            emit_single_op_instr(codegen_context, "push", Value::Reg(reg), AsmType::Qword);
+        }
+    }
+
     match fun {
         ExprAst::VarUse(fun_name) => {
             writeln!(codegen_context.asm_out, "\tcall {}", fun_name).unwrap();
         }
         _ => todo!(), // TODO : indirect call (need to put the function pointer in a reg)
     }
+    for &reg in caller_saved_regs.iter().rev() {
+        if codegen_context.used_regs[reg as usize] {
+            emit_single_op_instr(codegen_context, "pop", Value::Reg(reg), AsmType::Qword);
+        }
+    }
+
     codegen_context.used_regs[Reg::Rax as usize] = true;
     for arg in args_values {
         codegen_context.unused_value(arg);
@@ -440,6 +485,10 @@ fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) {
     let val = codegen_expr(codegen_context, val);
     let mov_type = asm_type_from_type(&codegen_context.current_fun_return_type);
     emit_mov(codegen_context, WriteVal::Reg(Reg::Rax), val, mov_type);
+    emit_binary_instr(codegen_context, "add", WriteVal::Reg(Reg::Rsp), Value::Constant(24), AsmType::Qword);
+    for &reg in CALLEE_SAVED_REGS.iter().rev() {
+        emit_single_op_instr(codegen_context, "pop", Value::Reg(reg), AsmType::Qword);
+    }
     codegen_context.asm_out.push_str(FUN_EPILOGUE);
     codegen_context.asm_out.push_str("\tret\n"); // TODO : have a method on a new type for the tab
 }
@@ -478,10 +527,31 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
     codegen_context.unused_value(val);
 }
 
+fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &[StatementAst], else_body : Option<&[StatementAst]>){
+    let condition_val = codegen_expr(codegen_context, condition);
+    // TODO : add the else
+    if else_body.is_some(){
+        panic!()
+    }
+    
+    let condition_write_val = condition_val.into_write_val(codegen_context);
+    emit_binary_instr(codegen_context, "cmp", condition_write_val, Value::Constant(0), AsmType::Dword);
+    // TODO : for these basic blocks, add an index for them, to not duplicate names
+    let end_label = ".LBB1";
+    writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
+    writeln!(codegen_context.asm_out, "# if body").unwrap();
+    for statement in if_body {
+        codegen_statement(codegen_context, statement);
+    }
+    writeln!(codegen_context.asm_out, "# after").unwrap();
+    writeln!(codegen_context.asm_out, "{}", end_label).unwrap();
+}
+
 fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst){
     match ast {
-        StatementAst::Return(val) => codegen_return(codegen_context, val.as_ref()),
+        StatementAst::Return(val) => codegen_return(codegen_context, val),
         StatementAst::Var { name, var_type, val } => codegen_var_decl(codegen_context, name, var_type, val),
+        StatementAst::If { condition, if_body, else_body } => codegen_if(codegen_context, condition, if_body.as_ref(), else_body.as_deref()),
         StatementAst::Expr(e) => {
             codegen_expr(codegen_context, e);
         },
@@ -507,6 +577,16 @@ const ARG_REGS: &[Reg] = &[
 
 const MAX_ARGS : usize = ARG_REGS.len();
 
+
+// TODO : do I need to add rsp ?
+const CALLEE_SAVED_REGS : &[Reg] = &[
+    Reg::Rbx, 
+    Reg::R12, 
+    Reg::R13, 
+    Reg::R14, 
+    Reg::R15
+];
+
 // TODO : add .type	[FUNCTION NAME], @function and add .size [FUNCTION NAME], .-[FUNCTION NAME] like in gcc
 fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[StatementAst], return_type : &Type, args : &[Arg]){
     if args.len() > MAX_ARGS {
@@ -517,6 +597,14 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
     writeln!(&mut codegen_context.asm_out, "{}:", name).unwrap();
     codegen_context.asm_out.push_str(FUN_PRELUDE);
     codegen_context.used_regs = init_used_regs();
+
+    
+    // TODO : do this selectively (only if needed ?)
+    for &reg in CALLEE_SAVED_REGS {
+        emit_single_op_instr(codegen_context, "push", Value::Reg(reg), AsmType::Qword);
+    }
+
+    emit_binary_instr(codegen_context, "sub", WriteVal::Reg(Reg::Rsp), Value::Constant(24), AsmType::Qword);
 
     // TODO : replace this vec with a smallvec ? (after removing maximum of args)
     let mut stack_offsets = ArrayVec::<u32, 6>::new();
