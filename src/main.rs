@@ -11,6 +11,9 @@ mod assembler;
 mod linker;
 
 // TODO : use a arena allocator
+
+// TODO : improve cmd parsing (with a struct, and instead of 2 bool for link and assembling, having an enum to have the target of the tool : linking, assembling, etc)
+
 fn main() {
     let mut should_link = true;
     let mut should_assemble = true;
