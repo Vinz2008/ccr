@@ -1,7 +1,6 @@
 use std::{collections::VecDeque, iter::Peekable, str::Chars};
 
 use arrayvec::ArrayString;
-use enum_tag::EnumTag;
 
 use crate::types::Type;
 
@@ -16,9 +15,7 @@ pub(crate) enum BinOp {
     Equal, // =
 }
 
-// TODO : for the equal operator, implement the right associativity of operators
-
-#[derive(Debug, Clone, EnumTag)]
+#[derive(Debug, Clone)]
 pub(crate) enum Token {
     Number(u128),
     BinOp(BinOp),
@@ -35,8 +32,6 @@ pub(crate) enum Token {
     Type(Type),
     Identifier(String), // TODO : replace by identifier using a string interner (use FxHashMap, https://github.com/Vinz2008/rustaml/blob/main/src/string_intern.rs or https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
 }
-
-pub(crate) type TokenTag = <Token as EnumTag>::Tag;
 
 // TODO : add helper functions to eat a char while checking the char
 

@@ -1,8 +1,6 @@
 use std::collections::VecDeque;
 
-use enum_tag::EnumTag;
-
-use crate::{lexer::{BinOp, Token, TokenTag}, types::Type};
+use crate::{lexer::{BinOp, Token}, types::Type};
 
 // TODO : make it flat ? (is more optimized, but would complicated mutating it for peep hole opts)
 #[derive(Debug)]
@@ -64,13 +62,38 @@ pub(crate) enum TopLevelAst {
 
 // TODO : better error handling for these
 
-fn eat_token(tokens : &mut VecDeque<Token>, token_type : TokenTag) -> Token {
+
+macro_rules! eat_token {
+    ($expression:expr, $pattern:pat) => {
+        {
+            let tokens : &mut VecDeque<Token> = $expression;
+            let tok = tokens.pop_front().unwrap();
+            match tok {
+                $pattern => tok,
+                _ => panic!("wrong token : {:?}, expected : {}", tok, stringify!($pattern))
+            }
+        }
+    };
+    ($expression:expr, $pattern:pat, $expr_ret:expr) => {
+        {
+            let tokens : &mut VecDeque<Token> = $expression;
+            let tok = tokens.pop_front().unwrap();
+            match tok {
+                $pattern => $expr_ret,
+                _ => panic!("wrong token : {:?}, expected : {}", tok, stringify!($pattern))
+            }
+        } 
+    }
+}
+
+
+/*fn eat_token(tokens : &mut VecDeque<Token>, token_type : TokenTag) -> Token {
     let tok = tokens.pop_front().unwrap();
     if token_type != tok.tag() {
         panic!("wrong token : {:?}, expected : {:?}", tok.tag(), token_type);
     }
     tok
-}
+}*/
 
 #[inline(always)]
 fn pass_token(tokens : &mut VecDeque<Token>) -> Token {
@@ -90,19 +113,19 @@ fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
 fn parse_function_call(tokens : &mut VecDeque<Token>) -> ExprAst {
     let expr = parse_primary(tokens);
     if let Some(Token::LeftParen) = tokens.front(){
-        eat_token(tokens, TokenTag::LeftParen);
+        eat_token!(tokens, Token::LeftParen);
         let mut is_first = true;
         let mut args = Vec::new();
         while let Some(t) = tokens.front() && !matches!(t, Token::RightParen) {
             if is_first {
                 is_first = false;
             } else {
-                eat_token(tokens, TokenTag::Colon);
+                eat_token!(tokens, Token::Colon);
             }
             let arg = parse_expr(tokens);
             args.push(arg);
         }
-        eat_token(tokens, TokenTag::RightParen);
+        eat_token!(tokens, Token::RightParen);
         ExprAst::FunctionCall { fun: Box::new(expr), args: args.into_boxed_slice() }
     } else {
         expr
@@ -158,17 +181,9 @@ fn parse_expr(tokens : &mut VecDeque<Token>) -> ExprAst {
 }
 
 fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> StatementAst {
-    let ident = eat_token(tokens, TokenTag::Identifier);
-    let ident_str = match ident {
-        Token::Identifier(ident) => ident,
-        _ => unreachable!(),
-    };
+    let ident_str = eat_token!(tokens, Token::Identifier(s), s);
 
-    // TODO : make the eat token a macro instead ? to have pattern matching ? or just have a helper eat_token_fun pass can be passed a closure to match the token
-    let equal_tok = pass_token(tokens);
-    if !matches!(equal_tok, Token::BinOp(BinOp::Equal)){
-        panic!("expected equal, got {:?}", equal_tok);
-    }
+    eat_token!(tokens, Token::BinOp(BinOp::Equal));
 
     let val = parse_expr(tokens);
 
@@ -180,25 +195,25 @@ fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> StatementAs
 }
 
 fn parse_if(tokens : &mut VecDeque<Token>) -> StatementAst {
-    eat_token(tokens, TokenTag::LeftParen);
+    eat_token!(tokens, Token::LeftParen);
     let condition = parse_expr(tokens);
-    eat_token(tokens, TokenTag::RightParen);
+    eat_token!(tokens, Token::RightParen);
 
-    eat_token(tokens, TokenTag::LeftBrace);
+    eat_token!(tokens, Token::LeftBrace);
     let mut if_body = Vec::new();
     while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
         if_body.push(parse_statement(tokens));
     }
-    eat_token(tokens, TokenTag::RightBrace);
+    eat_token!(tokens, Token::RightBrace);
     let mut else_body = None;
     if let Some(Token::Else) = tokens.front() {
-        eat_token(tokens, TokenTag::Else);
-        eat_token(tokens, TokenTag::LeftBrace);
+        eat_token!(tokens, Token::Else);
+        eat_token!(tokens, Token::LeftBrace);
         let mut else_statements = Vec::new();
         while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
             else_statements.push(parse_statement(tokens));
         }
-        eat_token(tokens, TokenTag::RightBrace);
+        eat_token!(tokens, Token::RightBrace);
         else_body = Some(else_statements.into_boxed_slice());
     }
     
@@ -233,48 +248,31 @@ fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
         _ => StatementAst::Expr(parse_expr(tokens)),
     };
     if need_semicolon {
-        match tokens.front(){
-            Some(Token::SemiColon) => {
-                pass_token(tokens);
-            },
-            _ => panic!("missing semicolon"),
-        }
+        eat_token!(tokens, Token::SemiColon);
     }
     statement
 }
 
 // TODO : add global var support
 fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst {
-    let ident = eat_token(tokens, TokenTag::Identifier);
-    let ident_str = match ident {
-        Token::Identifier(ident) => ident,
-        _ => unreachable!(),
-    };
-    eat_token(tokens, TokenTag::LeftParen);
+    let ident_str = eat_token!(tokens, Token::Identifier(s), s);
+    eat_token!(tokens, Token::LeftParen);
     let mut args = Vec::new();
     let mut is_first = true;
     while let Some(t) = tokens.front() && !matches!(t, Token::RightParen) {
         if is_first {
             is_first = false;
         } else {
-            eat_token(tokens, TokenTag::Colon);
+            eat_token!(tokens, Token::Colon);
         }
-        let type_tok = eat_token(tokens, TokenTag::Type);
-        let arg_type = match type_tok {
-            Token::Type(t) => t,
-            _ => unreachable!(),
-        };
-        let arg_name_tok = eat_token(tokens, TokenTag::Identifier);
-        let arg_name = match arg_name_tok {
-            Token::Identifier(arg_name) => arg_name,
-            _ => unreachable!(),
-        };
+        let arg_type = eat_token!(tokens, Token::Type(t), t);
+        let arg_name = eat_token!(tokens, Token::Identifier(s), s);
         args.push(Arg { name: arg_name, arg_type });
     }
-    eat_token(tokens, TokenTag::RightParen);
+    eat_token!(tokens, Token::RightParen);
     match tokens.front(){
         Some(Token::SemiColon) => {
-            eat_token(tokens, TokenTag::SemiColon);
+            eat_token!(tokens, Token::SemiColon);
             return TopLevelAst::FuncProto { 
                 name: ident_str,
                 return_type: t, 
@@ -282,7 +280,7 @@ fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst 
             };
         }
         Some(_) => {
-            eat_token(tokens, TokenTag::LeftBrace);
+            eat_token!(tokens, Token::LeftBrace);
         }
         None => panic!("Unexpected end after proto"),
     }
@@ -291,7 +289,7 @@ fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst 
     while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
         statements.push(parse_statement(tokens));
     }
-    eat_token(tokens, TokenTag::RightBrace);
+    eat_token!(tokens, Token::RightBrace);
     TopLevelAst::Function { 
         name: ident_str, 
         body: statements,
