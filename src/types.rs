@@ -2,7 +2,7 @@ use std::cmp;
 
 use rustc_hash::FxHashMap;
 
-use crate::{codegen::Var, lexer::BinOp, parser::ExprAst};
+use crate::{codegen::Var, lexer::Operator, parser::ExprAst};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub(crate) struct FunctionType {
@@ -29,24 +29,20 @@ impl Type {
 }
 
 fn guess_lit_nb_type(nb : u128) -> Type {
-    if nb > u64::MAX as u128 {
+    if nb > i64::MAX as u128 {
         panic!("too big of a number");
     }
-    if nb > u32::MAX as u128 {
+    if nb > i32::MAX as u128 {
         Type::Long
-    } else if nb > u16::MAX as u128 {
-        Type::Int
-    } else if nb > u8::MAX as u128 {
-        Type::Short
     } else {
-        Type::Char
+        Type::Int
     }
 }
 
-fn get_binop_type(lhs : &ExprAst, binop : BinOp, rhs : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
+fn get_binop_type(lhs : &ExprAst, binop : Operator, rhs : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
     match binop {
-        BinOp::Cmp => Type::Int,
-        BinOp::Equal => rhs.get_type(vars),
+        Operator::Cmp => Type::Int,
+        Operator::Equal => rhs.get_type(vars),
         _ => {
             let lhs_type = lhs.get_type(vars);
             let rhs_type = rhs.get_type(vars);
@@ -54,6 +50,10 @@ fn get_binop_type(lhs : &ExprAst, binop : BinOp, rhs : &ExprAst, vars : &FxHashM
             cmp::max(max_type_size, Type::Int)
         }
     }
+}
+
+fn get_unary_type(val : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
+    val.get_type(vars)
 }
 
 fn get_function_call_type(fun : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
@@ -68,6 +68,7 @@ impl ExprAst {
             ExprAst::Char(_) => Type::Char,
             ExprAst::VarUse(ident) => vars.get(ident.as_ref()).unwrap().var_type.clone(),
             ExprAst::BinOp { lhs, op, rhs } => get_binop_type(lhs.as_ref(), *op, rhs.as_ref(), vars),
+            ExprAst::UnaryOp { op: _, val } => get_unary_type(val.as_ref(), vars),
             ExprAst::FunctionCall { fun, args: _ } => get_function_call_type(fun.as_ref(), vars),
         }
     }

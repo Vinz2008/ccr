@@ -1,5 +1,5 @@
 int f(int arg){
-    return 2 * arg + 2;
+    return 2 * arg + 4 + (-2);
 }
 
 int putchar(int ch);

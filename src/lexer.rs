@@ -6,7 +6,7 @@ use crate::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
-pub(crate) enum BinOp {
+pub(crate) enum Operator {
     Plus,
     Minus,
     Mult,
@@ -18,7 +18,7 @@ pub(crate) enum BinOp {
 #[derive(Debug, Clone)]
 pub(crate) enum Token {
     Number(u128),
-    BinOp(BinOp),
+    Operator(Operator),
     Char(char),
     LeftParen, // ( 
     RightParen, // )
@@ -76,12 +76,12 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
         binop.try_push(c).expect("too long operator");
     }
     let binop = match binop.as_ref() {
-        "+" => BinOp::Plus,
-        "-" => BinOp::Minus,
-        "*" => BinOp::Mult,
-        "/" => BinOp::Div,
-        "==" => BinOp::Cmp,
-        "=" => BinOp::Equal,
+        "+" => Operator::Plus,
+        "-" => Operator::Minus,
+        "*" => Operator::Mult,
+        "/" => Operator::Div,
+        "==" => Operator::Cmp,
+        "=" => Operator::Equal,
         "//" => {
             handle_comment(chars);
             return;
@@ -89,7 +89,7 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
         op => panic!("unknown op {}", op),
     };
     
-    tokens.push_back(Token::BinOp(binop));
+    tokens.push_back(Token::Operator(binop));
 }
 
 fn lex_type(ident : &str) -> Type {

@@ -3,7 +3,7 @@ use std::{fmt::Write as _, fs::File, io::Write as _, mem};
 use arrayvec::{ArrayString, ArrayVec};
 use rustc_hash::FxHashMap;
 
-use crate::{lexer::BinOp, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
+use crate::{lexer::Operator, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
@@ -368,8 +368,6 @@ fn codegen_char(c : char) -> Value {
     Value::Constant(c as i32)
 }
 
-// TODO : codegen should be the last step, so why not pass owned ast to codegen ?
-
 fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &ExprAst, assign_type : &Type) -> Value {
     // TODO : instead of this, just use a function that will be used for & to get the addr of an expr ?
     let mem_addr = match lhs {
@@ -410,8 +408,8 @@ fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type
     }
 }
 
-fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinOp, rhs : &ExprAst, expr_type : &Type) -> Value {
-    if op == BinOp::Equal {
+fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Operator, rhs : &ExprAst, expr_type : &Type) -> Value {
+    if op == Operator::Equal {
         return codegen_assign(codegen_context, lhs, rhs, expr_type);
     }
 
@@ -428,12 +426,12 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
     // TODO : do I need special handling for the output of some of these (is it always the same as the lhs ?)
     let mut res_write_val = lhs_val.into_write_val(codegen_context);
     let instruction = match op {
-        BinOp::Plus => "add",
-        BinOp::Minus => "sub",
-        BinOp::Mult => "imul",
-        BinOp::Div => "idiv",
-        BinOp::Cmp => "cmp",
-        BinOp::Equal => unreachable!(),
+        Operator::Plus => "add",
+        Operator::Minus => "sub",
+        Operator::Mult => "imul",
+        Operator::Div => "idiv",
+        Operator::Cmp => "cmp",
+        Operator::Equal => unreachable!(),
     };
 
     let reg_type = asm_type_from_type(expr_type);
@@ -441,7 +439,7 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
     
     // TODO : improve this code, so that when it is directly in a if condition, directly produce the jump
     match op {
-        BinOp::Cmp => {
+        Operator::Cmp => {
             emit_single_op_instr(codegen_context, "sete", res_write_val.into(), AsmType::Byte);
             res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
         },
@@ -451,6 +449,30 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
     codegen_context.unused_value(rhs_val);
 
     res_write_val.into()
+}
+
+fn codegen_unary(codegen_context : &mut CodegenContext, op : Operator, val : &ExprAst, expr_type : &Type) -> Value {
+    match (op, val){
+        (Operator::Minus, &ExprAst::Number(nb)) => {
+            let nb : i128 = nb.try_into().unwrap();
+            let nb : i64 = (-nb).try_into().unwrap();
+            return Value::Constant(nb.try_into().unwrap()); // TODO : for here and every other constant, work to make work bigger constants
+        }
+        _ => {}
+    }
+
+    let val = codegen_expr(codegen_context, val);
+
+    let reg_type = asm_type_from_type(expr_type);
+
+    match op {
+        Operator::Minus => {
+            emit_single_op_instr(codegen_context, "neg", val, reg_type);
+        }
+        _ => unreachable!(), 
+    }
+
+    val
 }
 
 fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Value {
@@ -544,6 +566,10 @@ fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Value 
             let expr_type = ast.get_type(&codegen_context.vars);
             codegen_binop(codegen_context, lhs.as_ref(), *op, rhs.as_ref(), &expr_type)
         },
+        ExprAst::UnaryOp { op, val } => {
+            let expr_type = ast.get_type(&codegen_context.vars);
+            codegen_unary(codegen_context, *op, val.as_ref(), &expr_type)
+        }
         ExprAst::FunctionCall { fun, args } => {
             codegen_function_call(codegen_context, fun.as_ref(), args)
         }
