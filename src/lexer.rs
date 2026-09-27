@@ -30,7 +30,7 @@ pub(crate) enum Token {
     If,
     Else,
     Type(Type),
-    Identifier(String), // TODO : replace by identifier using a string interner (use FxHashMap, https://github.com/Vinz2008/rustaml/blob/main/src/string_intern.rs or https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
+    Identifier(Box<str>), // TODO : replace by identifier using a string interner (use FxHashMap, https://github.com/Vinz2008/rustaml/blob/main/src/string_intern.rs or https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
 }
 
 fn eat_char(chars : &mut Peekable<Chars<'_>>, expected_c : char){
@@ -115,7 +115,7 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
         "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,
-        _ => Token::Identifier(identifier),
+        _ => Token::Identifier(identifier.into_boxed_str()),
     };
     tokens.push_back(tok);
 }

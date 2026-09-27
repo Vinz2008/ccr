@@ -43,7 +43,7 @@ fn guess_lit_nb_type(nb : u128) -> Type {
     }
 }
 
-fn get_binop_type(lhs : &ExprAst, binop : BinOp, rhs : &ExprAst, vars : &FxHashMap<String, Var>) -> Type {
+fn get_binop_type(lhs : &ExprAst, binop : BinOp, rhs : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
     match binop {
         BinOp::Cmp => Type::Int,
         BinOp::Equal => rhs.get_type(vars),
@@ -56,12 +56,12 @@ fn get_binop_type(lhs : &ExprAst, binop : BinOp, rhs : &ExprAst, vars : &FxHashM
     }
 }
 
-fn get_function_call_type(fun : &ExprAst, vars : &FxHashMap<String, Var>) -> Type {
+fn get_function_call_type(fun : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
     fun.get_type(vars).into_function_type().unwrap().ret_type.clone()
 }
 
 impl ExprAst {
-    pub(crate) fn get_type(&self, vars : &FxHashMap<String, Var>) -> Type {
+    pub(crate) fn get_type(&self, vars : &FxHashMap<Box<str>, Var>) -> Type {
         // TODO : need special handling here for the unary expr - and a static number (if found u32 and then need -, then it becomes a i64 ? check this)
         match self {
             ExprAst::Number(nb) => guess_lit_nb_type(*nb),

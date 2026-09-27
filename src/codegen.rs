@@ -147,7 +147,7 @@ struct CodegenContext {
     asm_out : String,
     value_buf : String,
     used_regs : [bool; Reg::Count as usize], // TODO : better reg allocation
-    vars : FxHashMap<String, Var>,
+    vars : FxHashMap<Box<str>, Var>,
     current_stack_offset : u32,
     current_fun_return_type : Type,
     next_idx : u32,
@@ -466,9 +466,9 @@ fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Va
 fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, args : &[ExprAst]) -> Value {
     let ret_type = fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
     let asm_ret_type = asm_type_from_type(&ret_type);
-    let mut args_values = args.iter().map(|arg| codegen_expr(codegen_context, arg)).collect::<Vec<_>>();
-    let args_types = args.iter().map(|arg| arg.get_type(&codegen_context.vars)).collect::<Vec<_>>();
-    let args_asm_types = args_types.iter().map(|arg_type| asm_type_from_type(arg_type)).collect::<Vec<_>>();
+    let mut args_values = args.iter().map(|arg| codegen_expr(codegen_context, arg)).collect::<Box<_>>();
+    let args_types = args.iter().map(|arg| arg.get_type(&codegen_context.vars)).collect::<Box<_>>();
+    let args_asm_types = args_types.iter().map(|arg_type| asm_type_from_type(arg_type)).collect::<Box<_>>();
 
     let proto_fun_type = match fun {
         ExprAst::VarUse(fun_name) => {
@@ -477,7 +477,7 @@ fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, 
         _ => todo!(), // TODO
     };
     let proto_args_types = proto_fun_type.args_type;
-    let proto_args_asm_types = proto_args_types.iter().map(|arg_type| asm_type_from_type(arg_type)).collect::<Vec<_>>();
+    let proto_args_asm_types = proto_args_types.iter().map(|arg_type| asm_type_from_type(arg_type)).collect::<Box<_>>();
 
     // TODO : make used the args regs ? to not have to move them then ?
     let regs_used = ARG_REGS.iter().take(args.len()).copied();
@@ -591,7 +591,7 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
     let val = codegen_expr(codegen_context, val);
     let type_size = type_size(var_type);
     let stack_offset = codegen_context.get_var_stack_offset(type_size);
-    codegen_context.vars.insert(name.to_string(), Var { 
+    codegen_context.vars.insert(Box::from(name), Var { 
         var_type: var_type.clone(), 
         stack_offset: Some(stack_offset),
     });
@@ -725,7 +725,7 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
     codegen_context.reset_stack_offset();
 
     let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Box<[_]>>();
-    codegen_context.vars.insert(name.to_string(), Var { var_type: Type::Function(Box::new(FunctionType {
+    codegen_context.vars.insert(Box::from(name), Var { var_type: Type::Function(Box::new(FunctionType {
         ret_type: return_type.clone(),
         args_type,
     })), stack_offset: None });
@@ -733,7 +733,7 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
 
 fn codegen_func_proto(codegen_context : &mut CodegenContext, name : &str, return_type : &Type, args : &[Arg]){
     let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Box<[_]>>();
-    codegen_context.vars.insert(name.to_string(), Var { var_type: Type::Function(Box::new(FunctionType {
+    codegen_context.vars.insert(Box::from(name), Var { var_type: Type::Function(Box::new(FunctionType {
         ret_type: return_type.clone(),
         args_type,
     })), stack_offset: None });

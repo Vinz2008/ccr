@@ -27,7 +27,7 @@ pub(crate) enum StatementAst {
     Expr(ExprAst),
     Return(ExprAst),
     Var {
-        name: String,
+        name: Box<str>,
         var_type: Type,
         val : ExprAst,
     },
@@ -41,21 +41,21 @@ pub(crate) enum StatementAst {
 
 #[derive(Debug)]
 pub(crate) struct Arg {
-    pub name : String,
+    pub name : Box<str>,
     pub arg_type : Type,
 }
 
 #[derive(Debug)]
 pub(crate) enum TopLevelAst {
     Function {
-        name: String,
-        args : Vec<Arg>,
-        body: Vec<StatementAst>,
+        name: Box<str>,
+        args : Box<[Arg]>,
+        body: Box<[StatementAst]>,
         return_type : Type,
     },
     FuncProto {
-        name: String,
-        args : Vec<Arg>,
+        name: Box<str>,
+        args : Box<[Arg]>,
         return_type : Type,
     }
 }
@@ -104,7 +104,7 @@ fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
     let t = pass_token(tokens);
     match t {
         Token::Number(nb) => ExprAst::Number(nb),
-        Token::Identifier(ident) => ExprAst::VarUse(ident.into_boxed_str()),
+        Token::Identifier(ident) => ExprAst::VarUse(ident),
         Token::Char(c) => ExprAst::Char(c),
         _ => panic!("Unknown token {:?}", t),
     }
@@ -276,7 +276,7 @@ fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst 
             return TopLevelAst::FuncProto { 
                 name: ident_str,
                 return_type: t, 
-                args, 
+                args: args.into_boxed_slice(), 
             };
         }
         Some(_) => {
@@ -292,9 +292,9 @@ fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst 
     eat_token!(tokens, Token::RightBrace);
     TopLevelAst::Function { 
         name: ident_str, 
-        body: statements,
+        body: statements.into_boxed_slice(),
         return_type: t,
-        args,
+        args: args.into_boxed_slice(),
     }
 }
 
