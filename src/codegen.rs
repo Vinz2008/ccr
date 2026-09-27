@@ -267,7 +267,7 @@ impl WriteVal {
 enum Value {
     Reg(Reg),
     Mem(MemAddr),
-    Constant(i32),
+    Constant(i64),
 }
 
 impl Value {
@@ -338,19 +338,22 @@ enum AsmType {
     Qword,
 }
 
-fn emit_mov(codegen_context : &mut CodegenContext, to : WriteVal, from : Value, reg_type : AsmType){
+fn emit_mov(codegen_context : &mut CodegenContext, to : WriteVal, mut from : Value, reg_type : AsmType){
     // no need for mov from one reg to the same reg
     if let Some(write_val) = from.as_write_val() && write_val == to {
         return;
     }
-    
+
+    if let Value::Constant(nb) = from && nb > i32::MAX as i64 && matches!(to, WriteVal::Mem(_)) {
+        from = from.into_write_val(codegen_context).into();
+    }
+
     let mut instruction = "mov";
     // TODO : improve this
     if matches!(to, WriteVal::Mem(_)){
         instruction = match reg_type {
-            AsmType::Dword => {
-                "mov dword ptr"
-            },
+            AsmType::Qword => "mov qword ptr",
+            AsmType::Dword => "mov dword ptr",
             _ => todo!(),
         };
     }
@@ -359,13 +362,13 @@ fn emit_mov(codegen_context : &mut CodegenContext, to : WriteVal, from : Value, 
 
 
 fn codegen_number(nb : u128) -> Value {
-    let nb : i32 = nb.try_into().unwrap();
+    let nb : i64 = nb.try_into().unwrap();
     Value::Constant(nb)
 }
 
 fn codegen_char(c : char) -> Value {
     let c : u8 = c.try_into().expect("too big char literal (unicode)");
-    Value::Constant(c as i32)
+    Value::Constant(c as i64)
 }
 
 fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &ExprAst, assign_type : &Type) -> Value {
@@ -423,6 +426,11 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Ope
         _ => {}
     }
 
+    if let Value::Constant(nb) = rhs_val && nb > i32::MAX as i64 {
+        // need this for if the immediate is bigger than 32 bits
+        rhs_val = rhs_val.into_write_val(codegen_context).into();
+    }
+
     // TODO : do I need special handling for the output of some of these (is it always the same as the lhs ?)
     let mut res_write_val = lhs_val.into_write_val(codegen_context);
     let instruction = match op {
@@ -456,7 +464,7 @@ fn codegen_unary(codegen_context : &mut CodegenContext, op : Operator, val : &Ex
         (Operator::Minus, &ExprAst::Number(nb)) => {
             let nb : i128 = nb.try_into().unwrap();
             let nb : i64 = (-nb).try_into().unwrap();
-            return Value::Constant(nb.try_into().unwrap()); // TODO : for here and every other constant, work to make work bigger constants
+            return Value::Constant(nb);
         }
         _ => {}
     }
@@ -576,6 +584,8 @@ fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Value 
         //_ => panic!("Unknown ast node : {:?}", ast),
     }
 }
+
+// TODO : should I add auto insert of return 0 for main
 
 fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) {
     let val = codegen_expr(codegen_context, val);
