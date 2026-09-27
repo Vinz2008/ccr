@@ -33,13 +33,18 @@ pub(crate) enum Token {
     Identifier(String), // TODO : replace by identifier using a string interner (use FxHashMap, https://github.com/Vinz2008/rustaml/blob/main/src/string_intern.rs or https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
 }
 
-// TODO : add helper functions to eat a char while checking the char
+fn eat_char(chars : &mut Peekable<Chars<'_>>, expected_c : char){
+    let c = chars.next().unwrap(); // eat '
+    if c != expected_c {
+        panic!("expected char {}, got {}", expected_c, c);
+    }
+}
 
 fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     let mut numbers = ArrayString::<19>::new();
     let mut c = chars.peek().copied();
     while let Some('0'..='9') = c {
-        chars.next();
+        chars.next().unwrap();
         numbers.try_push(c.unwrap()).expect("too big of a number in int lex");
         c = chars.peek().copied();
     }
@@ -101,7 +106,7 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
     let mut identifier = String::new();
     let mut c = chars.peek().copied();
     while let Some('a'..='z' | 'A'..='Z' | '_' | '0'..='9') = c {
-        chars.next();
+        chars.next().unwrap();
         identifier.push(c.unwrap());
         c = chars.peek().copied();
     }
@@ -117,7 +122,7 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
 
 fn single_char_tok(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>, tok : Token){
     tokens.push_back(tok);
-    chars.next();
+    chars.next().unwrap();
 }
 
 fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
@@ -125,10 +130,10 @@ fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
 }
 
 fn lex_char_lit(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
-    chars.next().unwrap(); // eat '
+    eat_char(chars, '\'');
     let c = chars.next().unwrap();
     tokens.push_back(Token::Char(c));
-    chars.next().unwrap(); // eat '
+    eat_char(chars, '\'');
 }
 
 pub(crate) fn lex(s : &str) -> VecDeque<Token> {
@@ -136,7 +141,7 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
     let mut tokens = VecDeque::new();
     while let Some(&c) = chars.peek() {
         if c.is_whitespace() {
-            chars.next();
+            chars.next().unwrap();
             continue;
         }
         match c {
