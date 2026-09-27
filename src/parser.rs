@@ -19,8 +19,6 @@ pub(crate) enum ExprAst {
     }
 }
 
-// TODO : replace all the Strings and Vec in these by Box<str> and Box slices
-
 
 #[derive(Debug)]
 pub(crate) enum StatementAst {
