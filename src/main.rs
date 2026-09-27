@@ -1,20 +1,25 @@
 use std::{env, fs};
 
-use crate::{codegen::codegen, lexer::lex, linker::link, parser::parse, preprocessor::preprocess};
+use crate::{assembler::assemble, codegen::codegen, lexer::lex, linker::link, parser::parse, preprocessor::preprocess};
 
 mod preprocessor;
 mod lexer;
 mod parser;
 mod types;
 mod codegen;
+mod assembler;
 mod linker;
 
 // TODO : use a arena allocator
 fn main() {
     let mut should_link = true;
+    let mut should_assemble = true;
     let mut f = None;
     for arg in env::args(){
         if arg == "-S" {
+            should_assemble = false;
+            should_link = false;
+        } else if arg == "-c" {
             should_link = false;
         } else {
             f = Some(arg);
@@ -27,8 +32,11 @@ fn main() {
     dbg!(&tokens);
     let ast = parse(tokens);
     dbg!(&ast);
-    codegen(ast);
+    let out_path = "out.s".as_ref();
+    codegen(ast, out_path);
     if should_link {
-        link("out.s".as_ref());
+        link(out_path);
+    } else if should_assemble {
+        assemble(out_path);
     }
 }

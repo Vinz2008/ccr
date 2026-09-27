@@ -1,4 +1,4 @@
-use std::{fmt::Write as _, fs::File, io::Write as _, mem};
+use std::{fmt::Write as _, fs::File, io::Write as _, mem, path::Path};
 
 use arrayvec::{ArrayString, ArrayVec};
 use rustc_hash::FxHashMap;
@@ -782,11 +782,11 @@ fn codegen_toplevel(codegen_context : &mut CodegenContext, top_level_ast : &TopL
     }
 }
 
-pub(crate) fn codegen(ast : Vec<TopLevelAst>){
+pub(crate) fn codegen(ast : Vec<TopLevelAst>, out_path : &Path){
     let mut codegen_context = CodegenContext::new();
     for a in ast {
         codegen_toplevel(&mut codegen_context, &a);
     }
-    let mut f = File::create("out.s").unwrap();
+    let mut f = File::create(out_path).unwrap();
     f.write_all(codegen_context.asm_out.as_bytes()).unwrap();
 }
