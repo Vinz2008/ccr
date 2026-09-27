@@ -63,6 +63,7 @@ pub(crate) enum TopLevelAst {
 }
 
 // TODO : better error handling for these
+
 fn eat_token(tokens : &mut VecDeque<Token>, token_type : TokenTag) -> Token {
     let tok = tokens.pop_front().unwrap();
     if token_type != tok.tag() {
@@ -117,6 +118,13 @@ fn get_prec(binop : BinOp) -> u8 {
     }
 }
 
+fn is_right_associative(binop : BinOp) -> bool {
+    match binop {
+        BinOp::Equal => true,
+        BinOp::Plus | BinOp::Minus | BinOp::Mult | BinOp::Div | BinOp::Cmp => false,
+    }
+}
+
 fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) -> ExprAst {
     let mut peek_tok = tokens.front().cloned();
     while let Some(Token::BinOp(binop)) = peek_tok && get_prec(binop) >= min_prec {
@@ -126,9 +134,13 @@ fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) 
         let mut rhs = parse_primary(tokens);
         peek_tok = tokens.front().cloned();
 
-        // TODO : add the case for right associative op with precedence equal to op, also need to change the +1 in parse_binop call to be conditional (see https://en.wikipedia.org/wiki/Operator-precedence_parser)
-        while let Some(Token::BinOp(binop)) = peek_tok && get_prec(binop) > op_prec {
-            rhs = parse_binop(tokens, rhs, op_prec + 1);
+        while let Some(Token::BinOp(binop)) = peek_tok && (get_prec(binop) > op_prec || (is_right_associative(binop) && get_prec(binop) == op_prec)) {
+            let increment = if get_prec(binop) > op_prec {
+                1
+            } else {
+                0
+            };
+            rhs = parse_binop(tokens, rhs, op_prec + increment);
             peek_tok = tokens.front().cloned();
         }
         lhs = ExprAst::BinOp { 
