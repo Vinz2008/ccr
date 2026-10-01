@@ -24,6 +24,8 @@ pub(crate) enum ExprAst {
 }
 
 
+// TODO : separate this between real statements (the expresions that can be used here : if (a) [STATEMENT] and the block items, that include additionaly var decls, which can't be used in the if body without a block)
+
 #[derive(Debug)]
 pub(crate) enum StatementAst {
     Expr(ExprAst),
@@ -36,8 +38,11 @@ pub(crate) enum StatementAst {
     // TODO : how to implement else if ? in the ast ? or as sugaring as if else in one another ?
     If {
         condition : ExprAst,
-        if_body : Box<[StatementAst]>, // TODO : make these body only one StatementAst after adding scopes
-        else_body : Option<Box<[StatementAst]>>,
+        if_body : Box<StatementAst>,
+        else_body : Option<Box<StatementAst>>,
+    },
+    Scope {
+        body : Box<[StatementAst]>,
     }
 }
 
@@ -87,15 +92,6 @@ macro_rules! eat_token {
         } 
     }
 }
-
-
-/*fn eat_token(tokens : &mut VecDeque<Token>, token_type : TokenTag) -> Token {
-    let tok = tokens.pop_front().unwrap();
-    if token_type != tok.tag() {
-        panic!("wrong token : {:?}, expected : {:?}", tok.tag(), token_type);
-    }
-    tok
-}*/
 
 #[inline(always)]
 fn pass_token(tokens : &mut VecDeque<Token>) -> Token {
@@ -215,34 +211,36 @@ fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> StatementAs
     }
 }
 
+fn parse_scope(tokens : &mut VecDeque<Token>) -> StatementAst {
+    eat_token!(tokens, Token::LeftBrace);
+    let mut body = Vec::new();
+    while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
+        body.push(parse_statement(tokens));
+    }
+    eat_token!(tokens, Token::RightBrace);
+    StatementAst::Scope { 
+        body: body.into_boxed_slice(),
+    }
+}
+
 fn parse_if(tokens : &mut VecDeque<Token>) -> StatementAst {
+    eat_token!(tokens, Token::If);
     eat_token!(tokens, Token::LeftParen);
     let condition = parse_expr(tokens);
     eat_token!(tokens, Token::RightParen);
 
-    eat_token!(tokens, Token::LeftBrace);
-    let mut if_body = Vec::new();
-    while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
-        if_body.push(parse_statement(tokens));
-    }
-    eat_token!(tokens, Token::RightBrace);
+    let if_body = parse_statement(tokens);
+    
     let mut else_body = None;
     if let Some(Token::Else) = tokens.front() {
         eat_token!(tokens, Token::Else);
-        eat_token!(tokens, Token::LeftBrace);
-        let mut else_statements = Vec::new();
-        while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
-            else_statements.push(parse_statement(tokens));
-        }
-        eat_token!(tokens, Token::RightBrace);
-        else_body = Some(else_statements.into_boxed_slice());
+        let body = parse_statement(tokens);
+        else_body = Some(Box::new(body));
     }
-    
-    
     
     StatementAst::If { 
         condition, 
-        if_body: if_body.into_boxed_slice(), 
+        if_body: Box::new(if_body), 
         else_body, 
     }
 }
@@ -263,9 +261,12 @@ fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
         },
         Token::If => {
             need_semicolon = false;
-            pass_token(tokens);
             parse_if(tokens)
         },
+        Token::LeftBrace => {
+            need_semicolon = false;
+            parse_scope(tokens)
+        }
         _ => StatementAst::Expr(parse_expr(tokens)),
     };
     if need_semicolon {

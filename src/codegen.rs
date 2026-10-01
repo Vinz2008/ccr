@@ -1,7 +1,7 @@
-use std::{fmt::Write as _, fs::File, io::Write as _, mem, path::Path};
+use std::{collections::hash_map::Entry, fmt::Write as _, fs::File, io::Write as _, mem, path::Path};
 
 use arrayvec::{ArrayString, ArrayVec};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{lexer::Operator, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
 
@@ -143,6 +143,18 @@ pub(crate) struct Var {
     stack_offset : Option<u32>,
 }
 
+struct Scope {
+    vars : FxHashSet<Box<str>>,
+}
+
+impl Scope {
+    fn new() -> Scope {
+        Scope { 
+            vars: FxHashSet::default() 
+        }
+    }
+}
+
 struct CodegenContext {
     asm_out : String,
     value_buf : String,
@@ -151,6 +163,7 @@ struct CodegenContext {
     current_stack_offset : u32,
     current_fun_return_type : Type,
     next_idx : u32,
+    scopes : Vec<Scope>,
 }
 
 const fn init_used_regs() -> [bool; Reg::Count as usize] {
@@ -170,6 +183,7 @@ impl CodegenContext {
             value_buf : String::with_capacity(3),
             used_regs: init_used_regs(),
             vars: FxHashMap::default(),
+            scopes: Vec::new(),
             current_stack_offset : 0,
             current_fun_return_type: Type::Int, // unused value
             next_idx: 0,
@@ -220,6 +234,33 @@ impl CodegenContext {
     fn reset_stack_offset(&mut self){
         // TODO : change this after pushing seletively ?
         self.current_stack_offset = (CALLEE_SAVED_REGS.len() * 8) as u32;
+    }
+
+    fn add_var(&mut self, name : Box<str>, var : Var){
+        let name = match self.vars.entry(name){
+            Entry::Vacant(entry) => {
+                let name = entry.key().clone();
+                entry.insert(var);
+                name
+            }
+            Entry::Occupied(entry) => panic!("duplicate var {}", entry.key()),
+        };
+        self.last_scope().vars.insert(name);
+    }
+
+    fn start_scope(&mut self){
+        self.scopes.push(Scope::new());
+    }
+
+    fn end_scope(&mut self){
+        let removed_scope = self.scopes.pop().expect("missing scope");
+        for var in removed_scope.vars {
+            self.vars.remove(&var).unwrap();
+        }
+    }
+
+    fn last_scope(&mut self) -> &mut Scope {
+        self.scopes.last_mut().unwrap()
     }
 }
 
@@ -627,17 +668,19 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
     let val = codegen_expr(codegen_context, val);
     let type_size = type_size(var_type);
     let stack_offset = codegen_context.get_var_stack_offset(type_size);
-    codegen_context.vars.insert(Box::from(name), Var { 
+    codegen_context.add_var(Box::from(name), Var { 
         var_type: var_type.clone(), 
         stack_offset: Some(stack_offset),
     });
+    
+
     let var_mem = WriteVal::Mem(mem_addr_from_stack_off(stack_offset));
     let mov_type = asm_type_from_type(var_type);
     emit_mov(codegen_context, var_mem, val, mov_type);
     codegen_context.unused_value(val);
 }
 
-fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &[StatementAst], else_body : Option<&[StatementAst]>){
+fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &StatementAst, else_body : Option<&StatementAst>){
     let condition_val = codegen_expr(codegen_context, condition);
 
     
@@ -648,9 +691,8 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
     let if_false_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "\tjz {}", if_false_label).unwrap();
     writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
-    for statement in if_body {
-        codegen_statement(codegen_context, statement);
-    }
+    codegen_statement(codegen_context, if_body);
+
     let end_label = match else_body {
         Some(else_body)=> {
             let else_label = if_false_label;
@@ -659,9 +701,9 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
             
             writeln!(codegen_context.asm_out, "# else body {}", if_idx).unwrap();
             writeln!(codegen_context.asm_out, "{}:", else_label).unwrap();
-            for statement in else_body {
-                codegen_statement(codegen_context, statement);
-            }
+
+            codegen_statement(codegen_context, else_body);
+
             end_label
         }
         None => if_false_label,
@@ -671,11 +713,20 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
     codegen_context.unused_value(condition_val);
 }
 
+fn codegen_scope(codegen_context : &mut CodegenContext, body : &[StatementAst]){
+    codegen_context.start_scope();
+    for statement in body {
+        codegen_statement(codegen_context, statement);
+    }
+    codegen_context.end_scope();
+}
+
 fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst){
     match ast {
         StatementAst::Return(val) => codegen_return(codegen_context, val),
         StatementAst::Var { name, var_type, val } => codegen_var_decl(codegen_context, name, var_type, val),
         StatementAst::If { condition, if_body, else_body } => codegen_if(codegen_context, condition, if_body.as_ref(), else_body.as_deref()),
+        StatementAst::Scope { body } => codegen_scope(codegen_context, body),
         StatementAst::Expr(e) => {
             codegen_expr(codegen_context, e);
         },
@@ -751,9 +802,12 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
         emit_mov(codegen_context, WriteVal::Mem(mem_addr), Value::Reg(reg_arg), mov_type);
     }
 
+
+    codegen_context.start_scope();
     for statement in body {
         codegen_statement(codegen_context, statement);
     }
+    codegen_context.end_scope();
 
     for arg in args {
         codegen_context.vars.remove(&arg.name);
@@ -784,6 +838,7 @@ fn codegen_toplevel(codegen_context : &mut CodegenContext, top_level_ast : &TopL
 
 pub(crate) fn codegen(ast : Vec<TopLevelAst>, out_path : &Path){
     let mut codegen_context = CodegenContext::new();
+    codegen_context.start_scope(); // start global scope
     for a in ast {
         codegen_toplevel(&mut codegen_context, &a);
     }

@@ -136,6 +136,8 @@ fn lex_char_lit(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>)
     eat_char(chars, '\'');
 }
 
+// TODO : add line infos to the tokens (should I make a token a struct ? should I have a separate VecDequeue for line infos ?)
+
 pub(crate) fn lex(s : &str) -> VecDeque<Token> {
     let mut chars = s.chars().peekable();
     let mut tokens = VecDeque::new();
