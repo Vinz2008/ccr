@@ -17,6 +17,7 @@ pub(crate) enum ExprAst {
         val : Box<ExprAst>,
     },
     VarUse(Box<str>),
+    String(Box<str>),
     FunctionCall {
         fun : Box<ExprAst>,
         args : Box<[ExprAst]>,
@@ -109,6 +110,7 @@ fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
             eat_token!(tokens, Token::RightParen);
             expr
         }
+        Token::String(str) => ExprAst::String(str),
         _ => panic!("Unknown token {:?}", t),
     }
 }

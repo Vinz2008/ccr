@@ -16,6 +16,7 @@ pub(crate) enum Type {
     Short,
     Int,
     Function(Box<FunctionType>),
+    Ptr(Box<Type>),
     Long,
 }
 
@@ -70,6 +71,7 @@ impl ExprAst {
             ExprAst::BinOp { lhs, op, rhs } => get_binop_type(lhs.as_ref(), *op, rhs.as_ref(), vars),
             ExprAst::UnaryOp { op: _, val } => get_unary_type(val.as_ref(), vars),
             ExprAst::FunctionCall { fun, args: _ } => get_function_call_type(fun.as_ref(), vars),
+            ExprAst::String(_) => Type::Ptr(Box::new(Type::Char)),
         }
     }
 }

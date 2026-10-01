@@ -31,7 +31,10 @@ pub(crate) enum Token {
     Else,
     Type(Type),
     Identifier(Box<str>), // TODO : replace by identifier using a string interner (use FxHashMap, https://github.com/Vinz2008/rustaml/blob/main/src/string_intern.rs or https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
+    String(Box<str>),
 }
+
+// TODO : add digraphs ? (<:, :>, <%, %>, etc)
 
 fn eat_char(chars : &mut Peekable<Chars<'_>>, expected_c : char){
     let c = chars.next().unwrap(); // eat '
@@ -60,12 +63,25 @@ const BINOP_CHARS : &[char] = &[
 
 const MAX_OP_LEN : usize = 2;
 
-fn handle_comment(chars : &mut Peekable<Chars<'_>>){
+fn lex_single_line_comment(chars : &mut Peekable<Chars<'_>>){
     while let Some(c) = chars.peek() && *c != '\n' {
         chars.next().unwrap();
     }
     if let Some(c) = chars.peek() && *c == '\n' {
         chars.next().unwrap();
+    }
+}
+
+fn lex_multi_line_comment(chars : &mut Peekable<Chars<'_>>){
+    loop {
+        if let Some('*') = chars.peek(){
+            chars.next().unwrap();
+            if let Some('/') = chars.peek(){
+                break;
+            }
+        } else {
+            chars.next().unwrap();
+        }
     }
 }
 
@@ -83,7 +99,11 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
         "==" => Operator::Cmp,
         "=" => Operator::Equal,
         "//" => {
-            handle_comment(chars);
+            lex_single_line_comment(chars);
+            return;
+        }
+        "/*" => {
+            lex_multi_line_comment(chars);
             return;
         }
         op => panic!("unknown op {}", op),
@@ -126,14 +146,50 @@ fn single_char_tok(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Toke
 }
 
 fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
-    handle_comment(chars);
+    lex_single_line_comment(chars);
+}
+
+// TODO : for the string case, could even search for the backlash in a quicker wqy (simd ? simd in 64 bits reg ?) to find quickly if there is \, and if not to have a fast path
+
+fn lex_char_inner(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> char {
+    let mut c = chars.next().unwrap();
+    if c == '\\' {
+        let escape_c = chars.next().unwrap();
+        // TODO : could use a big table instead (would need to make mandatory chars here ascii, but then why not make the lexing be on bytes to not have decoding overhead)
+        // TODO : \x and \o
+        c = match escape_c {
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            '0' => '\0',
+            'a' => '\x07',
+            'b' => '\x08',
+            'f' => '\x0C',
+            'v' => '\x0B',
+            _ => escape_c,
+        };
+    };
+    c
 }
 
 fn lex_char_lit(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     eat_char(chars, '\'');
-    let c = chars.next().unwrap();
+    let c = lex_char_inner(chars, tokens);
     tokens.push_back(Token::Char(c));
     eat_char(chars, '\'');
+}
+
+fn lex_string(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
+    eat_char(chars, '\"');
+    let mut str = String::new();
+    let mut c = chars.peek().copied();
+    while let Some(c_) = c && c_ != '"' {
+        let lexed_char = lex_char_inner(chars, tokens);
+        str.push(lexed_char);
+        c = chars.peek().copied();
+    }
+    eat_char(chars, '\"');
+    tokens.push_back(Token::String(str.into_boxed_str()));
 }
 
 // TODO : add line infos to the tokens (should I make a token a struct ? should I have a separate VecDequeue for line infos ?)
@@ -160,6 +216,7 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
             ';' => single_char_tok(&mut chars, &mut tokens, Token::SemiColon),
             '#' => lex_cpp_metadata(&mut chars),
             '\'' => lex_char_lit(&mut chars, &mut tokens),
+            '"' => lex_string(&mut chars, &mut tokens),
             _ => panic!("Unknown token '{}'", c),
         }
     }
