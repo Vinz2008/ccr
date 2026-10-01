@@ -53,7 +53,11 @@ fn get_binop_type(lhs : &ExprAst, binop : Operator, rhs : &ExprAst, vars : &FxHa
     }
 }
 
-fn get_unary_type(val : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
+fn get_infix_type(val : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
+    val.get_type(vars)
+}
+
+fn get_postfix_type(val : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
     val.get_type(vars)
 }
 
@@ -69,7 +73,8 @@ impl ExprAst {
             ExprAst::Char(_) => Type::Char,
             ExprAst::VarUse(ident) => vars.get(ident.as_ref()).unwrap().var_type.clone(),
             ExprAst::BinOp { lhs, op, rhs } => get_binop_type(lhs.as_ref(), *op, rhs.as_ref(), vars),
-            ExprAst::UnaryOp { op: _, val } => get_unary_type(val.as_ref(), vars),
+            ExprAst::InfixOp { op: _, val } => get_infix_type(val.as_ref(), vars),
+            ExprAst::PostfixOp { val, op: _ } => get_postfix_type(val.as_ref(), vars),
             ExprAst::FunctionCall { fun, args: _ } => get_function_call_type(fun.as_ref(), vars),
             ExprAst::String(_) => Type::Ptr(Box::new(Type::Char)),
         }

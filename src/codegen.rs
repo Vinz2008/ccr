@@ -3,7 +3,7 @@ use std::{collections::hash_map::Entry, fmt::Write as _, fs::File, io::Write as 
 use arrayvec::{ArrayString, ArrayVec};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{lexer::Operator, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
+use crate::{lexer::{Operator, UnaryOp}, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
 
 // TODO : split this file in multiple files (maybe have a codegen/ folder)
 
@@ -406,7 +406,15 @@ impl From<WriteVal> for Value {
     }
 }
 
-fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &'static str, to : &WriteVal, from : &Value, reg_type : AsmType){
+fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &str, to : &WriteVal, from : &Value, reg_type : AsmType){
+    let mut instruction = instruction.to_owned();
+    if matches!(to, WriteVal::Mem(_)){
+        instruction = match reg_type {
+            AsmType::Qword => format!("{} qword ptr", instruction),
+            AsmType::Dword => format!("{} dword ptr", instruction),
+            _ => todo!(),
+        }
+    }
     to.to_addressing_str(&mut codegen_context.value_buf, reg_type);
     write!(&mut codegen_context.asm_out, "\t{} {}, ", instruction, codegen_context.value_buf).unwrap();
     from.to_addressing_str(&mut codegen_context.value_buf, reg_type);
@@ -437,16 +445,7 @@ fn emit_mov(codegen_context : &mut CodegenContext, to : &WriteVal, mut from : Va
         from = from.into_write_val(codegen_context).into();
     }
 
-    let mut instruction = "mov";
-    // TODO : improve this
-    if matches!(to, WriteVal::Mem(_)){
-        instruction = match reg_type {
-            AsmType::Qword => "mov qword ptr",
-            AsmType::Dword => "mov dword ptr",
-            _ => todo!(),
-        };
-    }
-    emit_binary_instr(codegen_context, instruction, to, &from, reg_type);
+    emit_binary_instr(codegen_context, "mov", to, &from, reg_type);
 }
 
 
@@ -472,7 +471,6 @@ fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &
     };
     let rhs = codegen_expr(codegen_context, rhs);
 
-    // TODO : do the mov
     let asm_type = asm_type_from_type(assign_type);
     emit_mov(codegen_context, &WriteVal::Mem(mem_addr), rhs.clone(), asm_type);
 
@@ -527,19 +525,24 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Ope
         Operator::Minus => "sub",
         Operator::Mult => "imul",
         Operator::Div => "idiv",
-        Operator::Cmp => "cmp",
+        Operator::Cmp | Operator::Lower => "cmp",
         Operator::Equal => unreachable!(),
     };
 
     let reg_type = asm_type_from_type(expr_type);
     emit_binary_instr(codegen_context, instruction, &res_write_val, &rhs_val, reg_type);
     
+    // TODO : need to change the comparisons depnding if signed or not
     // TODO : improve this code, so that when it is directly in a if condition, directly produce the jump
     match op {
         Operator::Cmp => {
             emit_single_op_instr(codegen_context, "sete", &res_write_val.clone().into(), AsmType::Byte);
             res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
         },
+        Operator::Lower => {
+            emit_single_op_instr(codegen_context, "setl", &res_write_val.clone().into(), AsmType::Byte);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+        }
         _ => {},
     }
 
@@ -548,7 +551,7 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Ope
     res_write_val.into()
 }
 
-fn codegen_unary(codegen_context : &mut CodegenContext, op : Operator, val : &ExprAst, expr_type : &Type) -> Value {
+fn codegen_infix(codegen_context : &mut CodegenContext, op : Operator, val : &ExprAst, expr_type : &Type) -> Value {
     match (op, val){
         (Operator::Minus, &ExprAst::Number(nb)) => {
             let nb : i128 = nb.try_into().unwrap();
@@ -570,6 +573,28 @@ fn codegen_unary(codegen_context : &mut CodegenContext, op : Operator, val : &Ex
     }
 
     val
+}
+
+fn codegen_postfix(codegen_context : &mut CodegenContext, val : &ExprAst, op : UnaryOp, expr_type : &Type) -> Value {
+    // TODO : refactor this with the equal version of the code ?
+    let mem_addr = match val {
+        ExprAst::VarUse(var_ident) => {
+            let var = codegen_context.vars.get(var_ident.as_ref()).unwrap();
+            let stack_offset = var.stack_offset.unwrap();
+            mem_addr_from_stack_off(stack_offset)
+        },
+        _ => panic!("lvalue not implemented : {:?}", val),
+    };
+    let asm_type = asm_type_from_type(expr_type);
+
+    match op {
+        UnaryOp::PostfixPlus => {
+            let reg = codegen_context.next_reg().unwrap();
+            emit_mov(codegen_context, &WriteVal::Reg(reg), Value::Mem(mem_addr.clone()), asm_type);
+            emit_binary_instr(codegen_context, "add", &WriteVal::Mem(mem_addr), &Value::Constant(1), asm_type);
+            Value::Reg(reg)
+        }
+    }
 }
 
 fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Value {
@@ -683,9 +708,13 @@ fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Value 
             let expr_type = ast.get_type(&codegen_context.vars);
             codegen_binop(codegen_context, lhs.as_ref(), *op, rhs.as_ref(), &expr_type)
         },
-        ExprAst::UnaryOp { op, val } => {
+        ExprAst::InfixOp { op, val } => {
             let expr_type = ast.get_type(&codegen_context.vars);
-            codegen_unary(codegen_context, *op, val.as_ref(), &expr_type)
+            codegen_infix(codegen_context, *op, val.as_ref(), &expr_type)
+        }
+        ExprAst::PostfixOp { val, op } => {
+            let expr_type = ast.get_type(&codegen_context.vars);
+            codegen_postfix(codegen_context, val, *op, &expr_type)
         }
         ExprAst::FunctionCall { fun, args } => {
             codegen_function_call(codegen_context, fun.as_ref(), args)
@@ -754,7 +783,7 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
 
     
     let condition_write_val = condition_val.clone().into_write_val(codegen_context);
-    emit_binary_instr(codegen_context, "cmp", &condition_write_val, &Value::Constant(0), AsmType::Dword);
+    emit_binary_instr(codegen_context, "test", &condition_write_val, &condition_val, AsmType::Dword);
     
     let if_idx = codegen_context.next_idx();
     let if_false_label = codegen_context.next_label_str();
@@ -790,11 +819,33 @@ fn codegen_scope(codegen_context : &mut CodegenContext, body : &[StatementAst]){
     codegen_context.end_scope();
 }
 
+fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &StatementAst){
+    let while_idx = codegen_context.next_idx();
+    let cond_label = codegen_context.next_label_str();
+    writeln!(codegen_context.asm_out, "# while condition {}", while_idx).unwrap();
+    writeln!(codegen_context.asm_out, "{}:", cond_label).unwrap();
+    
+    let condition_val = codegen_expr(codegen_context, condition);
+    let condition_write_val = condition_val.clone().into_write_val(codegen_context);
+    emit_binary_instr(codegen_context, "test", &condition_write_val, &condition_val, AsmType::Dword);
+    let end_label = codegen_context.next_label_str();
+    writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
+
+    writeln!(codegen_context.asm_out, "# while body {}", while_idx).unwrap();
+    codegen_statement(codegen_context, if_body);
+
+    writeln!(codegen_context.asm_out, "\tjmp {}", cond_label).unwrap();
+
+    writeln!(codegen_context.asm_out, "# end while {}", while_idx).unwrap();
+    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+}
+
 fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst){
     match ast {
         StatementAst::Return(val) => codegen_return(codegen_context, val),
         StatementAst::Var { name, var_type, val } => codegen_var_decl(codegen_context, name, var_type, val),
         StatementAst::If { condition, if_body, else_body } => codegen_if(codegen_context, condition, if_body.as_ref(), else_body.as_deref()),
+        StatementAst::While { condition, body } => codegen_while(codegen_context, condition, body),
         StatementAst::Scope { body } => codegen_scope(codegen_context, body),
         StatementAst::Expr(e) => {
             codegen_expr(codegen_context, e);

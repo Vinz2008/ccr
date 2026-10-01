@@ -5,7 +5,6 @@ use arrayvec::ArrayString;
 use crate::types::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
 pub(crate) enum Operator {
     Plus,
     Minus,
@@ -13,12 +12,22 @@ pub(crate) enum Operator {
     Div,
     Cmp, // ==
     Equal, // =
+    // TODO : add other comparisons operators
+    Lower, // <
+}
+
+// operators which are only unary (++, --, etc)
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UnaryOp {
+    PostfixPlus,
+    // TODO : add more postfix operators
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum Token {
     Number(u128),
     Operator(Operator),
+    UnaryOp(UnaryOp),
     Char(char),
     LeftParen, // ( 
     RightParen, // )
@@ -29,6 +38,7 @@ pub(crate) enum Token {
     Return,
     If,
     Else,
+    While,
     Type(Type),
     Identifier(Box<str>), // TODO : replace by identifier using a string interner (use FxHashMap, https://github.com/Vinz2008/rustaml/blob/main/src/string_intern.rs or https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html)
     String(Box<str>),
@@ -58,7 +68,7 @@ fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
 }
 
 const BINOP_CHARS : &[char] = &[
-    '+', '-', '*', '/', '=',
+    '+', '-', '*', '/', '=', '<'
 ];
 
 const MAX_OP_LEN : usize = 2;
@@ -98,6 +108,11 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
         "/" => Operator::Div,
         "==" => Operator::Cmp,
         "=" => Operator::Equal,
+        "<" => Operator::Lower,
+        "++" => {
+            tokens.push_back(Token::UnaryOp(UnaryOp::PostfixPlus));
+            return;
+        },
         "//" => {
             lex_single_line_comment(chars);
             return;
@@ -135,6 +150,7 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
         "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,
+        "while" => Token::While,
         _ => Token::Identifier(identifier.into_boxed_str()),
     };
     tokens.push_back(tok);
@@ -151,7 +167,7 @@ fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
 
 // TODO : for the string case, could even search for the backlash in a quicker wqy (simd ? simd in 64 bits reg ?) to find quickly if there is \, and if not to have a fast path
 
-fn lex_char_inner(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> char {
+fn lex_char_inner(chars : &mut Peekable<Chars<'_>>) -> char {
     let mut c = chars.next().unwrap();
     if c == '\\' {
         let escape_c = chars.next().unwrap();
@@ -174,7 +190,7 @@ fn lex_char_inner(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
 
 fn lex_char_lit(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     eat_char(chars, '\'');
-    let c = lex_char_inner(chars, tokens);
+    let c = lex_char_inner(chars);
     tokens.push_back(Token::Char(c));
     eat_char(chars, '\'');
 }
@@ -184,7 +200,7 @@ fn lex_string(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     let mut str = String::new();
     let mut c = chars.peek().copied();
     while let Some(c_) = c && c_ != '"' {
-        let lexed_char = lex_char_inner(chars, tokens);
+        let lexed_char = lex_char_inner(chars);
         str.push(lexed_char);
         c = chars.peek().copied();
     }

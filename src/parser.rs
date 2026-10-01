@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::{lexer::{Operator, Token}, types::Type};
+use crate::{lexer::{Operator, Token, UnaryOp}, types::Type};
 
 // TODO : make it flat ? (is more optimized, but would complicated mutating it for peep hole opts)
 #[derive(Debug)]
@@ -12,9 +12,13 @@ pub(crate) enum ExprAst {
         op : Operator,
         rhs : Box<ExprAst>,
     },
-    UnaryOp {
+    InfixOp {
         op : Operator,
         val : Box<ExprAst>,
+    },
+    PostfixOp {
+        val : Box<ExprAst>,
+        op : UnaryOp,
     },
     VarUse(Box<str>),
     String(Box<str>),
@@ -41,6 +45,10 @@ pub(crate) enum StatementAst {
         condition : ExprAst,
         if_body : Box<StatementAst>,
         else_body : Option<Box<StatementAst>>,
+    },
+    While {
+        condition : ExprAst,
+        body : Box<StatementAst>,
     },
     Scope {
         body : Box<[StatementAst]>,
@@ -115,25 +123,30 @@ fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
     }
 }
 
-fn parse_function_call(tokens : &mut VecDeque<Token>) -> ExprAst {
+fn parse_postfix(tokens : &mut VecDeque<Token>) -> ExprAst {
     let expr = parse_primary(tokens);
-    if let Some(Token::LeftParen) = tokens.front(){
-        eat_token!(tokens, Token::LeftParen);
-        let mut is_first = true;
-        let mut args = Vec::new();
-        while let Some(t) = tokens.front() && !matches!(t, Token::RightParen) {
-            if is_first {
-                is_first = false;
-            } else {
-                eat_token!(tokens, Token::Colon);
+    match tokens.front(){
+        Some(Token::LeftParen) => {
+            eat_token!(tokens, Token::LeftParen);
+            let mut is_first = true;
+            let mut args = Vec::new();
+            while let Some(t) = tokens.front() && !matches!(t, Token::RightParen) {
+                if is_first {
+                    is_first = false;
+                } else {
+                    eat_token!(tokens, Token::Colon);
+                }
+                let arg = parse_expr(tokens);
+                args.push(arg);
             }
-            let arg = parse_expr(tokens);
-            args.push(arg);
+            eat_token!(tokens, Token::RightParen);
+            ExprAst::FunctionCall { fun: Box::new(expr), args: args.into_boxed_slice() }
         }
-        eat_token!(tokens, Token::RightParen);
-        ExprAst::FunctionCall { fun: Box::new(expr), args: args.into_boxed_slice() }
-    } else {
-        expr
+        Some(&Token::UnaryOp(op)) => {
+            pass_token(tokens);
+            ExprAst::PostfixOp { val: Box::new(expr), op }
+        }
+        _ => expr,
     }
 }
 
@@ -144,10 +157,10 @@ fn parse_unary(tokens : &mut VecDeque<Token>) -> ExprAst {
             _ => panic!("wrong unary operator"),
         }
         pass_token(tokens);
-        let expr = parse_function_call(tokens);
-        ExprAst::UnaryOp { op, val: Box::new(expr) }
+        let expr = parse_postfix(tokens);
+        ExprAst::InfixOp { op, val: Box::new(expr) }
     } else {
-        parse_function_call(tokens)
+        parse_postfix(tokens)
     }
 }
 
@@ -155,15 +168,16 @@ fn get_prec(binop : Operator) -> u8 {
     match binop {
         Operator::Equal => 1,
         Operator::Cmp => 2,
-        Operator::Plus | Operator::Minus => 3,
-        Operator::Mult | Operator::Div => 4,
+        Operator::Lower => 3,
+        Operator::Plus | Operator::Minus => 4,
+        Operator::Mult | Operator::Div => 5,
     }
 }
 
 fn is_right_associative(binop : Operator) -> bool {
     match binop {
         Operator::Equal => true,
-        Operator::Plus | Operator::Minus | Operator::Mult | Operator::Div | Operator::Cmp => false,
+        Operator::Plus | Operator::Minus | Operator::Mult | Operator::Div | Operator::Cmp | Operator::Lower => false,
     }
 }
 
@@ -247,6 +261,20 @@ fn parse_if(tokens : &mut VecDeque<Token>) -> StatementAst {
     }
 }
 
+fn parse_while(tokens : &mut VecDeque<Token>) -> StatementAst {
+    eat_token!(tokens, Token::While);
+    eat_token!(tokens, Token::LeftParen);
+    let condition = parse_expr(tokens);
+    eat_token!(tokens, Token::RightParen);
+
+    let while_body = parse_statement(tokens);
+
+    StatementAst::While { 
+        condition, 
+        body: Box::new(while_body),
+    }
+}
+
 fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
     let t = tokens.front().unwrap(); // TODO : better error handling
     dbg!(&t);
@@ -265,6 +293,10 @@ fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
             need_semicolon = false;
             parse_if(tokens)
         },
+        Token::While => {
+            need_semicolon = false;
+            parse_while(tokens)
+        }
         Token::LeftBrace => {
             need_semicolon = false;
             parse_scope(tokens)
