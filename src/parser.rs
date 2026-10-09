@@ -50,6 +50,12 @@ pub(crate) enum StatementAst {
         condition : ExprAst,
         body : Box<StatementAst>,
     },
+    For {
+        init : Box<StatementAst>, // TODO : this should be either an init or expr
+        condition : ExprAst,
+        change : ExprAst,
+        for_body : Box<StatementAst>,
+    },
     Scope {
         body : Box<[StatementAst]>,
     }
@@ -275,6 +281,27 @@ fn parse_while(tokens : &mut VecDeque<Token>) -> StatementAst {
     }
 }
 
+fn parse_for(tokens : &mut VecDeque<Token>) -> StatementAst {
+    eat_token!(tokens, Token::For);
+    eat_token!(tokens, Token::LeftParen);
+
+    let init = parse_statement(tokens);
+    dbg!(&tokens);
+    //eat_token!(tokens, Token::SemiColon); // TODO : don't need it, because parse_statement already does it, should I change it (a aux function ?)
+    let condition = parse_expr(tokens);
+    eat_token!(tokens, Token::SemiColon);
+    let change = parse_expr(tokens);
+    eat_token!(tokens, Token::RightParen);
+    let for_body = parse_statement(tokens);
+    
+    StatementAst::For { 
+        init: Box::new(init), 
+        condition,
+        change ,
+        for_body: Box::new(for_body),
+    }
+}
+
 fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
     let t = tokens.front().unwrap(); // TODO : better error handling
     dbg!(&t);
@@ -296,6 +323,10 @@ fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
         Token::While => {
             need_semicolon = false;
             parse_while(tokens)
+        }
+        Token::For => {
+            need_semicolon = false;
+            parse_for(tokens)
         }
         Token::LeftBrace => {
             need_semicolon = false;

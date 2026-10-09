@@ -819,7 +819,7 @@ fn codegen_scope(codegen_context : &mut CodegenContext, body : &[StatementAst]){
     codegen_context.end_scope();
 }
 
-fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &StatementAst){
+fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, while_body : &StatementAst){
     let while_idx = codegen_context.next_idx();
     let cond_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "# while condition {}", while_idx).unwrap();
@@ -832,11 +832,39 @@ fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, if
     writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
 
     writeln!(codegen_context.asm_out, "# while body {}", while_idx).unwrap();
-    codegen_statement(codegen_context, if_body);
+    codegen_statement(codegen_context, while_body);
 
     writeln!(codegen_context.asm_out, "\tjmp {}", cond_label).unwrap();
 
     writeln!(codegen_context.asm_out, "# end while {}", while_idx).unwrap();
+    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+}
+
+fn codegen_for(codegen_context : &mut CodegenContext, init : &StatementAst, condition : &ExprAst, change : &ExprAst, for_body : &StatementAst){
+    let for_idx = codegen_context.next_idx();
+    writeln!(codegen_context.asm_out, "# for init {}", for_idx).unwrap();
+    codegen_statement(codegen_context, init);
+
+    let cond_label = codegen_context.next_label_str();
+    writeln!(codegen_context.asm_out, "# for condition {}", for_idx).unwrap();
+    writeln!(codegen_context.asm_out, "{}:", cond_label).unwrap();
+    
+    let condition_val = codegen_expr(codegen_context, condition);
+    let condition_write_val = condition_val.clone().into_write_val(codegen_context);
+    emit_binary_instr(codegen_context, "test", &condition_write_val, &condition_val, AsmType::Dword);
+    let end_label = codegen_context.next_label_str();
+    writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
+
+    writeln!(codegen_context.asm_out, "# for body {}", for_idx).unwrap();
+    codegen_statement(codegen_context, for_body);
+
+    writeln!(codegen_context.asm_out, "# for change {}", for_idx).unwrap();
+
+    codegen_expr(codegen_context, change);
+
+    writeln!(codegen_context.asm_out, "\tjmp {}", cond_label).unwrap();
+
+    writeln!(codegen_context.asm_out, "# end for {}", for_idx).unwrap();
     writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
 }
 
@@ -846,6 +874,7 @@ fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst)
         StatementAst::Var { name, var_type, val } => codegen_var_decl(codegen_context, name, var_type, val),
         StatementAst::If { condition, if_body, else_body } => codegen_if(codegen_context, condition, if_body.as_ref(), else_body.as_deref()),
         StatementAst::While { condition, body } => codegen_while(codegen_context, condition, body),
+        StatementAst::For { init, condition, change, for_body } => codegen_for(codegen_context, init, condition, change, for_body),
         StatementAst::Scope { body } => codegen_scope(codegen_context, body),
         StatementAst::Expr(e) => {
             codegen_expr(codegen_context, e);
