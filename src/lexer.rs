@@ -10,6 +10,7 @@ pub(crate) enum Operator {
     Minus,
     Mult,
     Div,
+    Rem,
     Cmp, // ==
     Equal, // =
     // TODO : add other comparisons operators

@@ -14,6 +14,19 @@ mod linker;
 
 // TODO : improve cmd parsing (with a struct, and instead of 2 bool for link and assembling, having an enum to have the target of the tool : linking, assembling, etc)
 
+// TODO : add pointers
+// TODO : add sizeof
+// TODO : add casts
+// TODO : add arrays
+// TODO : add bitwise operators
+// TODO : add logical operators
+// TODO : add continue and break
+// TODO : add switch
+// TODO : add do while
+// TODO : add goto and labels
+// TODO : add structs
+// TODO : add comma operators (will it create problems when parsing function args ?)
+
 fn main() {
     let mut should_link = true;
     let mut should_assemble = true;

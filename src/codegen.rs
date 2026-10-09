@@ -525,6 +525,7 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Ope
         Operator::Minus => "sub",
         Operator::Mult => "imul",
         Operator::Div => "idiv",
+        Operator::Rem => todo!(), // TODO : need to improve the division part (because the outputs are fixed and also the inputs, so need better reg alloc ?)
         Operator::Cmp | Operator::Lower => "cmp",
         Operator::Equal => unreachable!(),
     };

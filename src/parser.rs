@@ -176,14 +176,14 @@ fn get_prec(binop : Operator) -> u8 {
         Operator::Cmp => 2,
         Operator::Lower => 3,
         Operator::Plus | Operator::Minus => 4,
-        Operator::Mult | Operator::Div => 5,
+        Operator::Mult | Operator::Div | Operator::Rem => 5,
     }
 }
 
 fn is_right_associative(binop : Operator) -> bool {
     match binop {
         Operator::Equal => true,
-        Operator::Plus | Operator::Minus | Operator::Mult | Operator::Div | Operator::Cmp | Operator::Lower => false,
+        Operator::Plus | Operator::Minus | Operator::Mult | Operator::Div | Operator::Rem | Operator::Cmp | Operator::Lower => false,
     }
 }
 
