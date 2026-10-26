@@ -13,22 +13,19 @@ pub(crate) enum Operator {
     Rem,
     Cmp, // ==
     Equal, // =
-    // TODO : add other comparisons operators
     Lower, // <
+    Upper,
+    LowerEqual,
+    UpperEqual,
+    PlusPlus, // ++
+    MinusMinus, // --
 }
 
-// operators which are only unary (++, --, etc)
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum UnaryOp {
-    PostfixPlus,
-    // TODO : add more postfix operators
-}
 
 #[derive(Debug, Clone)]
 pub(crate) enum Token {
     Number(u128),
     Operator(Operator),
-    UnaryOp(UnaryOp),
     Char(char),
     LeftParen, // ( 
     RightParen, // )
@@ -111,10 +108,11 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
         "==" => Operator::Cmp,
         "=" => Operator::Equal,
         "<" => Operator::Lower,
-        "++" => {
-            tokens.push_back(Token::UnaryOp(UnaryOp::PostfixPlus));
-            return;
-        },
+        ">" => Operator::Upper,
+        "<=" => Operator::LowerEqual,
+        ">=" => Operator::UpperEqual,
+        "++" => Operator::PlusPlus,
+        "--" => Operator::MinusMinus,
         "//" => {
             lex_single_line_comment(chars);
             return;
@@ -168,7 +166,7 @@ fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
     lex_single_line_comment(chars);
 }
 
-// TODO : for the string case, could even search for the backlash in a quicker wqy (simd ? simd in 64 bits reg ?) to find quickly if there is \, and if not to have a fast path
+// TODO : for the string case, could even search for the backlash in a quicker way (simd ? simd in 64 bits reg ?) to find quickly if there is \, and if not to have a fast path
 
 fn lex_char_inner(chars : &mut Peekable<Chars<'_>>) -> char {
     let mut c = chars.next().unwrap();

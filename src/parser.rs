@@ -1,6 +1,67 @@
 use std::collections::VecDeque;
 
-use crate::{lexer::{Operator, Token, UnaryOp}, types::Type};
+use crate::{lexer::{Operator, Token}, types::Type};
+
+// TODO : refactor this ? (maybe make the lexer op a enum of these ?)
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PostfixOp {
+    PlusPlus,
+    MinusMinus,
+}
+
+#[derive(Debug)]
+pub(crate) struct OperatorError(Operator);
+
+impl TryFrom<Operator> for PostfixOp {
+    type Error = OperatorError; // TODO : better error ?
+
+    fn try_from(value: Operator) -> Result<Self, Self::Error> {
+        let postfix_op = match value {
+            Operator::PlusPlus => PostfixOp::PlusPlus,
+            Operator::MinusMinus => PostfixOp::MinusMinus,
+            _ => return Err(OperatorError(value)),
+        };
+        Ok(postfix_op)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BinaryOp {
+    Plus,
+    Minus,
+    Mult,
+    Div,
+    Rem,
+    Cmp, // ==
+    Equal, // =
+    Lower, // <
+    Upper,
+    LowerEqual,
+    UpperEqual,
+}
+
+impl TryFrom<Operator> for BinaryOp {
+    type Error = (); // TODO : better error ?
+
+    fn try_from(value: Operator) -> Result<Self, Self::Error> {
+        let binary_op = match value {
+            Operator::Plus => BinaryOp::Plus,
+            Operator::Minus => BinaryOp::Minus,
+            Operator::Mult => BinaryOp::Mult,
+            Operator::Div => BinaryOp::Div,
+            Operator::Rem => BinaryOp::Rem,
+            Operator::Cmp => BinaryOp::Cmp,
+            Operator::Equal => BinaryOp::Equal,
+            Operator::Lower => BinaryOp::Lower,
+            Operator::Upper => BinaryOp::Upper,
+            Operator::LowerEqual => BinaryOp::LowerEqual,
+            Operator::UpperEqual => BinaryOp::UpperEqual,
+            _ => return Err(()),
+        };
+        Ok(binary_op)
+    }
+}
 
 // TODO : make it flat ? (is more optimized, but would complicated mutating it for peep hole opts)
 #[derive(Debug)]
@@ -9,7 +70,7 @@ pub(crate) enum ExprAst {
     Char(char),
     BinOp {
         lhs : Box<ExprAst>,
-        op : Operator,
+        op : BinaryOp,
         rhs : Box<ExprAst>,
     },
     InfixOp {
@@ -18,7 +79,7 @@ pub(crate) enum ExprAst {
     },
     PostfixOp {
         val : Box<ExprAst>,
-        op : UnaryOp,
+        op : PostfixOp,
     },
     VarUse(Box<str>),
     String(Box<str>),
@@ -148,9 +209,13 @@ fn parse_postfix(tokens : &mut VecDeque<Token>) -> ExprAst {
             eat_token!(tokens, Token::RightParen);
             ExprAst::FunctionCall { fun: Box::new(expr), args: args.into_boxed_slice() }
         }
-        Some(&Token::UnaryOp(op)) => {
+        Some(&Token::Operator(op)) => {
+            let postfix_op = match op.try_into(){
+                Ok(op) => op,
+                Err(_) => return expr,
+            };
             pass_token(tokens);
-            ExprAst::PostfixOp { val: Box::new(expr), op }
+            ExprAst::PostfixOp { val: Box::new(expr), op: postfix_op }
         }
         _ => expr,
     }
@@ -170,33 +235,41 @@ fn parse_unary(tokens : &mut VecDeque<Token>) -> ExprAst {
     }
 }
 
-fn get_prec(binop : Operator) -> u8 {
+fn get_prec(binop : BinaryOp) -> u8 {
     match binop {
-        Operator::Equal => 1,
-        Operator::Cmp => 2,
-        Operator::Lower => 3,
-        Operator::Plus | Operator::Minus => 4,
-        Operator::Mult | Operator::Div | Operator::Rem => 5,
+        BinaryOp::Equal => 1,
+        BinaryOp::Cmp => 2,
+        BinaryOp::Lower | BinaryOp::Upper | BinaryOp::LowerEqual | BinaryOp::UpperEqual => 3,
+        BinaryOp::Plus | BinaryOp::Minus => 4,
+        BinaryOp::Mult | BinaryOp::Div | BinaryOp::Rem => 5,
     }
 }
 
-fn is_right_associative(binop : Operator) -> bool {
+fn is_right_associative(binop : BinaryOp) -> bool {
     match binop {
-        Operator::Equal => true,
-        Operator::Plus | Operator::Minus | Operator::Mult | Operator::Div | Operator::Rem | Operator::Cmp | Operator::Lower => false,
+        BinaryOp::Equal => true,
+        BinaryOp::Plus | BinaryOp::Minus | BinaryOp::Mult | BinaryOp::Div 
+        | BinaryOp::Rem | BinaryOp::Cmp | BinaryOp::Lower | BinaryOp::Upper | BinaryOp::LowerEqual | BinaryOp::UpperEqual => false,
     }
 }
 
 fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) -> ExprAst {
     let mut peek_tok = tokens.front().cloned();
-    while let Some(Token::Operator(binop)) = peek_tok && get_prec(binop) >= min_prec {
+    while let Some(Token::Operator(op)) = peek_tok {
+        let binop = op.try_into().unwrap(); // TODO : better error handling
+        if get_prec(binop) < min_prec {
+            break;
+        }
         pass_token(tokens);
-        let op = binop;
-        let op_prec = get_prec(op);
+        let op_prec = get_prec(binop);
         let mut rhs = parse_unary(tokens);
         peek_tok = tokens.front().cloned();
 
-        while let Some(Token::Operator(binop)) = peek_tok && (get_prec(binop) > op_prec || (is_right_associative(binop) && get_prec(binop) == op_prec)) {
+        while let Some(Token::Operator(op)) = peek_tok {
+            let binop = op.try_into().unwrap();
+            if get_prec(binop) <= op_prec && (!is_right_associative(binop) || get_prec(binop) != op_prec){
+                break;
+            }
             let increment = if get_prec(binop) > op_prec {
                 1
             } else {
@@ -207,7 +280,7 @@ fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) 
         }
         lhs = ExprAst::BinOp { 
             lhs: Box::new(lhs), 
-            op,
+            op: binop,
             rhs: Box::new(rhs) 
         };
     }

@@ -3,7 +3,7 @@ use std::{collections::hash_map::Entry, fmt::Write as _, fs::File, io::Write as 
 use arrayvec::{ArrayString, ArrayVec};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{lexer::{Operator, UnaryOp}, parser::{Arg, ExprAst, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
+use crate::{lexer::Operator, parser::{Arg, BinaryOp, ExprAst, PostfixOp, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
 
 // TODO : split this file in multiple files (maybe have a codegen/ folder)
 
@@ -251,7 +251,7 @@ impl CodegenContext {
         self.current_stack_offset
     }
     fn reset_stack_offset(&mut self){
-        // TODO : change this after pushing seletively ?
+        // TODO : change this after pushing selectively ?
         self.current_stack_offset = (CALLEE_SAVED_REGS.len() * 8) as u32;
     }
 
@@ -498,8 +498,8 @@ fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type
     }
 }
 
-fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Operator, rhs : &ExprAst, expr_type : &Type) -> Value {
-    if op == Operator::Equal {
+fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinaryOp, rhs : &ExprAst, expr_type : &Type) -> Value {
+    if op == BinaryOp::Equal {
         return codegen_assign(codegen_context, lhs, rhs, expr_type);
     }
 
@@ -521,27 +521,39 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Ope
     // TODO : do I need special handling for the output of some of these (is it always the same as the lhs ?)
     let mut res_write_val = lhs_val.into_write_val(codegen_context);
     let instruction = match op {
-        Operator::Plus => "add",
-        Operator::Minus => "sub",
-        Operator::Mult => "imul",
-        Operator::Div => "idiv",
-        Operator::Rem => todo!(), // TODO : need to improve the division part (because the outputs are fixed and also the inputs, so need better reg alloc ?)
-        Operator::Cmp | Operator::Lower => "cmp",
-        Operator::Equal => unreachable!(),
+        BinaryOp::Plus => "add",
+        BinaryOp::Minus => "sub",
+        BinaryOp::Mult => "imul",
+        BinaryOp::Div => "idiv",
+        BinaryOp::Rem => todo!(), // TODO : need to improve the division part (because the outputs are fixed and also the inputs, so need better reg alloc ?)
+        BinaryOp::Cmp | BinaryOp::Lower | BinaryOp::Upper | BinaryOp::LowerEqual | BinaryOp::UpperEqual => "cmp",
+        BinaryOp::Equal => unreachable!(),
     };
 
     let reg_type = asm_type_from_type(expr_type);
     emit_binary_instr(codegen_context, instruction, &res_write_val, &rhs_val, reg_type);
     
-    // TODO : need to change the comparisons depnding if signed or not
+    // TODO : need to change the comparisons depending if signed or not (currently is signed)
     // TODO : improve this code, so that when it is directly in a if condition, directly produce the jump
     match op {
-        Operator::Cmp => {
+        BinaryOp::Cmp => {
             emit_single_op_instr(codegen_context, "sete", &res_write_val.clone().into(), AsmType::Byte);
             res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
         },
-        Operator::Lower => {
+        BinaryOp::Lower => {
             emit_single_op_instr(codegen_context, "setl", &res_write_val.clone().into(), AsmType::Byte);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+        }
+        BinaryOp::Upper => {
+            emit_single_op_instr(codegen_context, "setg", &res_write_val.clone().into(), AsmType::Byte);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+        }
+        BinaryOp::LowerEqual => {
+            emit_single_op_instr(codegen_context, "setle", &res_write_val.clone().into(), AsmType::Byte);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+        }
+        BinaryOp::UpperEqual => {
+            emit_single_op_instr(codegen_context, "setge", &res_write_val.clone().into(), AsmType::Byte);
             res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
         }
         _ => {},
@@ -576,7 +588,7 @@ fn codegen_infix(codegen_context : &mut CodegenContext, op : Operator, val : &Ex
     val
 }
 
-fn codegen_postfix(codegen_context : &mut CodegenContext, val : &ExprAst, op : UnaryOp, expr_type : &Type) -> Value {
+fn codegen_postfix(codegen_context : &mut CodegenContext, val : &ExprAst, op : PostfixOp, expr_type : &Type) -> Value {
     // TODO : refactor this with the equal version of the code ?
     let mem_addr = match val {
         ExprAst::VarUse(var_ident) => {
@@ -589,10 +601,16 @@ fn codegen_postfix(codegen_context : &mut CodegenContext, val : &ExprAst, op : U
     let asm_type = asm_type_from_type(expr_type);
 
     match op {
-        UnaryOp::PostfixPlus => {
+        PostfixOp::PlusPlus => {
             let reg = codegen_context.next_reg().unwrap();
             emit_mov(codegen_context, &WriteVal::Reg(reg), Value::Mem(mem_addr.clone()), asm_type);
             emit_binary_instr(codegen_context, "add", &WriteVal::Mem(mem_addr), &Value::Constant(1), asm_type);
+            Value::Reg(reg)
+        }
+        PostfixOp::MinusMinus => {
+            let reg = codegen_context.next_reg().unwrap();
+            emit_mov(codegen_context, &WriteVal::Reg(reg), Value::Mem(mem_addr.clone()), asm_type);
+            emit_binary_instr(codegen_context, "sub", &WriteVal::Mem(mem_addr), &Value::Constant(1), asm_type);
             Value::Reg(reg)
         }
     }

@@ -2,7 +2,7 @@ use std::cmp;
 
 use rustc_hash::FxHashMap;
 
-use crate::{codegen::Var, lexer::Operator, parser::ExprAst};
+use crate::{codegen::Var, parser::{BinaryOp, ExprAst}};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub(crate) struct FunctionType {
@@ -40,10 +40,10 @@ fn guess_lit_nb_type(nb : u128) -> Type {
     }
 }
 
-fn get_binop_type(lhs : &ExprAst, binop : Operator, rhs : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
+fn get_binop_type(lhs : &ExprAst, binop : BinaryOp, rhs : &ExprAst, vars : &FxHashMap<Box<str>, Var>) -> Type {
     match binop {
-        Operator::Cmp => Type::Int,
-        Operator::Equal => rhs.get_type(vars),
+        BinaryOp::Cmp => Type::Int,
+        BinaryOp::Equal => rhs.get_type(vars),
         _ => {
             let lhs_type = lhs.get_type(vars);
             let rhs_type = rhs.get_type(vars);
