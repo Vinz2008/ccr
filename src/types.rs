@@ -16,7 +16,7 @@ pub(crate) enum Type {
     Short,
     Int,
     Function(Box<FunctionType>),
-    Ptr(Box<Type>),
+    Ptr(Box<Type>), // TODO : need to add char const*
     Long,
 }
 

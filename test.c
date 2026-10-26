@@ -4,7 +4,7 @@ int f(int arg){
 
 int putchar(int ch);
 
-int main(int argc){
+int main(int argc, char** argv){
     int a = 3;
     int b = f(a);
     putchar('a');

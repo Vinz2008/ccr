@@ -127,17 +127,7 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
     tokens.push_back(Token::Operator(binop));
 }
 
-fn lex_type(ident : &str) -> Type {
-    match ident {
-        "char" => Type::Char,
-        "short" => Type::Short,
-        "int" => Type::Int,
-        "long" => Type::Long,
-        _ => panic!("wrong type"),
-    }
-}
-
-fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
+fn lex_identifier_inner(chars : &mut Peekable<Chars<'_>>) -> String {
     let mut identifier = String::new();
     let mut c = chars.peek().copied();
     while let Some('a'..='z' | 'A'..='Z' | '_' | '0'..='9') = c {
@@ -145,8 +135,53 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
         identifier.push(c.unwrap());
         c = chars.peek().copied();
     }
+    return identifier;
+}
+
+fn pass_space(chars : &mut Peekable<Chars<'_>>){
+    while let Some(c) = chars.peek().copied() && c.is_whitespace() {
+        chars.next().unwrap();
+    }
+}
+
+fn lex_identifier_for_type(chars : &mut Peekable<Chars<'_>>) -> String {
+    pass_space(chars);
+    return lex_identifier_inner(chars);
+}
+
+// TODO : add const in the type (need to make Type a struct with a is_const bool and a type inner enum)
+fn lex_type_inner(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : bool) -> Type {
+    let mut res_type = match ident {
+        "char" => Type::Char,
+        "short" => Type::Short,
+        "int" => Type::Int,
+        "long" => Type::Long,
+        _ => panic!("wrong type"),
+    };
+    pass_space(chars);
+    while let Some('*') = chars.peek().copied(){
+        res_type = Type::Ptr(Box::new(res_type));
+        chars.next().unwrap();
+    }
+    res_type
+}
+
+fn lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str) -> Type {
+    match ident {
+        "const" => {
+            let next_ident = lex_identifier_for_type(chars);
+            lex_type_inner(chars, &next_ident, true)
+        },
+        _ => {
+            lex_type_inner(chars, ident, false)
+        }
+    }
+}
+
+fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
+    let identifier = lex_identifier_inner(chars);
     let tok = match identifier.as_str() {
-        "char" | "short" | "int" | "long"  => Token::Type(lex_type(identifier.as_str())), // TODO : add more types
+        "char" | "short" | "int" | "long" | "const"  => Token::Type(lex_type(chars, identifier.as_str())), // TODO : add more types
         "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,

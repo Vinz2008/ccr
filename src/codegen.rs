@@ -762,7 +762,7 @@ fn type_size(var_type : &Type) -> u32 {
         Type::Char => 1,
         Type::Short => 2,
         Type::Int => 4,
-        Type::Long | Type::Function(_) | Type::Ptr(_) => 8,
+        Type::Long | Type::Function(_) | Type::Ptr { .. } => 8,
     }
 }
 
@@ -771,7 +771,7 @@ fn asm_type_from_type(t : &Type) -> AsmType {
         Type::Char => AsmType::Byte,
         Type::Short => AsmType::Word,
         Type::Int => AsmType::Dword,
-        Type::Long | Type::Function(_) | Type::Ptr(_) => AsmType::Qword,
+        Type::Long | Type::Function(_) | Type::Ptr { .. } => AsmType::Qword,
     }
 }
 
