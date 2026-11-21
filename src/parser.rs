@@ -2,6 +2,18 @@ use std::collections::VecDeque;
 
 use crate::{lexer::{Operator, Token}, types::Type};
 
+#[derive(Debug)]
+pub(crate) enum ParserError {
+    WrongTok {
+        got : Token,
+        expected : Box<str>,
+    },
+    UnexpectedTok(Token),
+    WrongUnaryOp(Operator),
+    WrongBinOp(Operator),
+    UnexpectedEof,
+}
+
 // TODO : refactor this ? (maybe make the lexer op a enum of these ?)
 
 #[derive(Debug, Clone, Copy)]
@@ -10,17 +22,14 @@ pub(crate) enum PostfixOp {
     MinusMinus,
 }
 
-#[derive(Debug)]
-pub(crate) struct OperatorError(Operator);
-
 impl TryFrom<Operator> for PostfixOp {
-    type Error = OperatorError; // TODO : better error ?
+    type Error = ();
 
     fn try_from(value: Operator) -> Result<Self, Self::Error> {
         let postfix_op = match value {
             Operator::PlusPlus => PostfixOp::PlusPlus,
             Operator::MinusMinus => PostfixOp::MinusMinus,
-            _ => return Err(OperatorError(value)),
+            _ => return Err(()),
         };
         Ok(postfix_op)
     }
@@ -42,7 +51,7 @@ pub(crate) enum BinaryOp {
 }
 
 impl TryFrom<Operator> for BinaryOp {
-    type Error = (); // TODO : better error ?
+    type Error = ParserError;
 
     fn try_from(value: Operator) -> Result<Self, Self::Error> {
         let binary_op = match value {
@@ -57,7 +66,7 @@ impl TryFrom<Operator> for BinaryOp {
             Operator::Upper => BinaryOp::Upper,
             Operator::LowerEqual => BinaryOp::LowerEqual,
             Operator::UpperEqual => BinaryOp::UpperEqual,
-            _ => return Err(()),
+            _ => return Err(ParserError::WrongBinOp(value)),
         };
         Ok(binary_op)
     }
@@ -142,56 +151,54 @@ pub(crate) enum TopLevelAst {
     }
 }
 
-// TODO : better error handling for these
-
-
 macro_rules! eat_token {
     ($expression:expr, $pattern:pat) => {
         {
             let tokens : &mut VecDeque<Token> = $expression;
-            let tok = tokens.pop_front().unwrap();
+            let tok = tokens.pop_front().ok_or(ParserError::UnexpectedEof)?;
             match tok {
                 $pattern => tok,
-                _ => panic!("wrong token : {:?}, expected : {}", tok, stringify!($pattern))
+                _ => return Err(ParserError::WrongTok { got : tok, expected : Box::from(stringify!($pattern))}),
             }
         }
     };
     ($expression:expr, $pattern:pat, $expr_ret:expr) => {
         {
             let tokens : &mut VecDeque<Token> = $expression;
-            let tok = tokens.pop_front().unwrap();
+            let tok = tokens.pop_front().ok_or(ParserError::UnexpectedEof)?;
             match tok {
                 $pattern => $expr_ret,
-                _ => panic!("wrong token : {:?}, expected : {}", tok, stringify!($pattern))
+                _ => return Err(ParserError::WrongTok { got : tok, expected : Box::from(stringify!($pattern))}),
             }
         } 
     }
 }
 
 #[inline(always)]
-fn pass_token(tokens : &mut VecDeque<Token>) -> Token {
-    tokens.pop_front().unwrap()
+fn pass_token(tokens : &mut VecDeque<Token>) -> Result<Token, ParserError> {
+    tokens.pop_front().ok_or(ParserError::UnexpectedEof)
 }
 
-fn parse_primary(tokens : &mut VecDeque<Token>) -> ExprAst {
-    let t = pass_token(tokens);
-    match t {
+fn parse_primary(tokens : &mut VecDeque<Token>) -> Result<ExprAst, ParserError> {
+    let t = pass_token(tokens)?;
+    let e = match t {
         Token::Number(nb) => ExprAst::Number(nb),
         Token::Identifier(ident) => ExprAst::VarUse(ident),
         Token::Char(c) => ExprAst::Char(c),
         Token::LeftParen => {
-            let expr = parse_expr(tokens);
+            let expr = parse_expr(tokens)?;
             eat_token!(tokens, Token::RightParen);
             expr
         }
         Token::String(str) => ExprAst::String(str),
-        _ => panic!("Unknown token {:?}", t),
-    }
+        _ => return Err(ParserError::UnexpectedTok(t)),
+    };
+    Ok(e)
 }
 
-fn parse_postfix(tokens : &mut VecDeque<Token>) -> ExprAst {
-    let expr = parse_primary(tokens);
-    match tokens.front(){
+fn parse_postfix(tokens : &mut VecDeque<Token>) -> Result<ExprAst, ParserError> {
+    let expr = parse_primary(tokens)?;
+    let e = match tokens.front(){
         Some(Token::LeftParen) => {
             eat_token!(tokens, Token::LeftParen);
             let mut is_first = true;
@@ -202,7 +209,7 @@ fn parse_postfix(tokens : &mut VecDeque<Token>) -> ExprAst {
                 } else {
                     eat_token!(tokens, Token::Colon);
                 }
-                let arg = parse_expr(tokens);
+                let arg = parse_expr(tokens)?;
                 args.push(arg);
             }
             eat_token!(tokens, Token::RightParen);
@@ -211,24 +218,25 @@ fn parse_postfix(tokens : &mut VecDeque<Token>) -> ExprAst {
         Some(&Token::Operator(op)) => {
             let postfix_op = match op.try_into(){
                 Ok(op) => op,
-                Err(_) => return expr,
+                Err(_) => return Ok(expr),
             };
-            pass_token(tokens);
+            pass_token(tokens)?;
             ExprAst::PostfixOp { val: Box::new(expr), op: postfix_op }
         }
         _ => expr,
-    }
+    };
+    Ok(e)
 }
 
-fn parse_unary(tokens : &mut VecDeque<Token>) -> ExprAst {
+fn parse_unary(tokens : &mut VecDeque<Token>) -> Result<ExprAst, ParserError> {
     if let Some(Token::Operator(op)) = tokens.front().cloned() {
         match op {
             Operator::Minus => {},
-            _ => panic!("wrong unary operator"),
+            _ => return Err(ParserError::WrongUnaryOp(op)),
         }
-        pass_token(tokens);
-        let expr = parse_postfix(tokens);
-        ExprAst::InfixOp { op, val: Box::new(expr) }
+        pass_token(tokens)?;
+        let expr = parse_postfix(tokens)?;
+        Ok(ExprAst::InfixOp { op, val: Box::new(expr) })
     } else {
         parse_postfix(tokens)
     }
@@ -252,20 +260,20 @@ fn is_right_associative(binop : BinaryOp) -> bool {
     }
 }
 
-fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) -> ExprAst {
+fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) -> Result<ExprAst, ParserError> {
     let mut peek_tok = tokens.front().cloned();
     while let Some(Token::Operator(op)) = peek_tok {
-        let binop = op.try_into().unwrap(); // TODO : better error handling
+        let binop = op.try_into()?;
         if get_prec(binop) < min_prec {
             break;
         }
-        pass_token(tokens);
+        pass_token(tokens)?;
         let op_prec = get_prec(binop);
-        let mut rhs = parse_unary(tokens);
+        let mut rhs = parse_unary(tokens)?;
         peek_tok = tokens.front().cloned();
 
         while let Some(Token::Operator(op)) = peek_tok {
-            let binop = op.try_into().unwrap();
+            let binop = op.try_into()?;
             if get_prec(binop) <= op_prec && (!is_right_associative(binop) || get_prec(binop) != op_prec){
                 break;
             }
@@ -274,7 +282,7 @@ fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) 
             } else {
                 0
             };
-            rhs = parse_binop(tokens, rhs, op_prec + increment);
+            rhs = parse_binop(tokens, rhs, op_prec + increment)?;
             peek_tok = tokens.front().cloned();
         }
         lhs = ExprAst::BinOp { 
@@ -283,136 +291,136 @@ fn parse_binop(tokens : &mut VecDeque<Token>, mut lhs : ExprAst, min_prec : u8) 
             rhs: Box::new(rhs) 
         };
     }
-    lhs
+    Ok(lhs)
 }
 
-fn parse_expr(tokens : &mut VecDeque<Token>) -> ExprAst {
-    let lhs = parse_unary(tokens);
+fn parse_expr(tokens : &mut VecDeque<Token>) -> Result<ExprAst, ParserError> {
+    let lhs = parse_unary(tokens)?;
     parse_binop(tokens, lhs, 0)
 }
 
-fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> StatementAst {
+fn parse_var_decl(tokens : &mut VecDeque<Token>, var_type : Type) -> Result<StatementAst, ParserError> {
     let ident_str = eat_token!(tokens, Token::Identifier(s), s);
 
     eat_token!(tokens, Token::Operator(Operator::Equal));
 
-    let val = parse_expr(tokens);
+    let val = parse_expr(tokens)?;
 
-    StatementAst::Var { 
+    Ok(StatementAst::Var { 
         name: ident_str, 
         var_type,
         val,
-    }
+    })
 }
 
-fn parse_scope(tokens : &mut VecDeque<Token>) -> StatementAst {
+fn parse_scope(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError> {
     eat_token!(tokens, Token::LeftBrace);
     let mut body = Vec::new();
     while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
-        body.push(parse_statement(tokens));
+        body.push(parse_statement(tokens)?);
     }
     eat_token!(tokens, Token::RightBrace);
-    StatementAst::Scope { 
+    Ok(StatementAst::Scope { 
         body: body.into_boxed_slice(),
-    }
+    })
 }
 
-fn parse_if(tokens : &mut VecDeque<Token>) -> StatementAst {
+fn parse_if(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError> {
     eat_token!(tokens, Token::If);
     eat_token!(tokens, Token::LeftParen);
-    let condition = parse_expr(tokens);
+    let condition = parse_expr(tokens)?;
     eat_token!(tokens, Token::RightParen);
 
-    let if_body = parse_statement(tokens);
+    let if_body = parse_statement(tokens)?;
     
     let mut else_body = None;
     if let Some(Token::Else) = tokens.front() {
         eat_token!(tokens, Token::Else);
-        let body = parse_statement(tokens);
+        let body = parse_statement(tokens)?;
         else_body = Some(Box::new(body));
     }
     
-    StatementAst::If { 
+    Ok(StatementAst::If { 
         condition, 
         if_body: Box::new(if_body), 
         else_body, 
-    }
+    })
 }
 
-fn parse_while(tokens : &mut VecDeque<Token>) -> StatementAst {
+fn parse_while(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError> {
     eat_token!(tokens, Token::While);
     eat_token!(tokens, Token::LeftParen);
-    let condition = parse_expr(tokens);
+    let condition = parse_expr(tokens)?;
     eat_token!(tokens, Token::RightParen);
 
-    let while_body = parse_statement(tokens);
+    let while_body = parse_statement(tokens)?;
 
-    StatementAst::While { 
+    Ok(StatementAst::While { 
         condition, 
         body: Box::new(while_body),
-    }
+    })
 }
 
-fn parse_for(tokens : &mut VecDeque<Token>) -> StatementAst {
+fn parse_for(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError> {
     eat_token!(tokens, Token::For);
     eat_token!(tokens, Token::LeftParen);
 
-    let init = parse_statement(tokens);
+    let init = parse_statement(tokens)?;
     dbg!(&tokens);
-    let condition = parse_expr(tokens);
+    let condition = parse_expr(tokens)?;
     eat_token!(tokens, Token::SemiColon);
-    let change = parse_expr(tokens);
+    let change = parse_expr(tokens)?;
     eat_token!(tokens, Token::RightParen);
-    let for_body = parse_statement(tokens);
+    let for_body = parse_statement(tokens)?;
     
-    StatementAst::For { 
+    Ok(StatementAst::For { 
         init: Box::new(init), 
         condition,
         change ,
         for_body: Box::new(for_body),
-    }
+    })
 }
 
-fn parse_statement(tokens : &mut VecDeque<Token>) -> StatementAst {
-    let t = tokens.front().unwrap(); // TODO : better error handling
+fn parse_statement(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError> {
+    let t = tokens.front().ok_or(ParserError::UnexpectedEof)?;
     dbg!(&t);
     let mut need_semicolon = true;
     let statement = match t {
         Token::Return => {
-            pass_token(tokens);
-            StatementAst::Return(parse_expr(tokens))
+            pass_token(tokens)?;
+            StatementAst::Return(parse_expr(tokens)?)
         },
         Token::Type(t) => {
             let t = t.clone();
-            pass_token(tokens);
-            parse_var_decl(tokens, t)
+            pass_token(tokens)?;
+            parse_var_decl(tokens, t)?
         },
         Token::If => {
             need_semicolon = false;
-            parse_if(tokens)
+            parse_if(tokens)?
         },
         Token::While => {
             need_semicolon = false;
-            parse_while(tokens)
+            parse_while(tokens)?
         }
         Token::For => {
             need_semicolon = false;
-            parse_for(tokens)
+            parse_for(tokens)?
         }
         Token::LeftBrace => {
             need_semicolon = false;
-            parse_scope(tokens)
+            parse_scope(tokens)?
         }
-        _ => StatementAst::Expr(parse_expr(tokens)),
+        _ => StatementAst::Expr(parse_expr(tokens)?),
     };
     if need_semicolon {
         eat_token!(tokens, Token::SemiColon);
     }
-    statement
+    Ok(statement)
 }
 
 // TODO : add global var support
-fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst {
+fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> Result<TopLevelAst, ParserError> {
     let ident_str = eat_token!(tokens, Token::Identifier(s), s);
     eat_token!(tokens, Token::LeftParen);
     let mut args = Vec::new();
@@ -431,45 +439,45 @@ fn parse_top_level_decl(tokens : &mut VecDeque<Token>, t : Type) -> TopLevelAst 
     match tokens.front(){
         Some(Token::SemiColon) => {
             eat_token!(tokens, Token::SemiColon);
-            return TopLevelAst::FuncProto { 
+            return Ok(TopLevelAst::FuncProto { 
                 name: ident_str,
                 return_type: t, 
                 args: args.into_boxed_slice(), 
-            };
+            });
         }
         Some(_) => {
             eat_token!(tokens, Token::LeftBrace);
         }
-        None => panic!("Unexpected end after proto"),
+        None => return Err(ParserError::UnexpectedEof),
     }
 
     let mut statements = Vec::new();
     while let Some(t) = tokens.front() && !matches!(t, Token::RightBrace) {
-        statements.push(parse_statement(tokens));
+        statements.push(parse_statement(tokens)?);
     }
     eat_token!(tokens, Token::RightBrace);
-    TopLevelAst::Function { 
+    Ok(TopLevelAst::Function { 
         name: ident_str, 
         body: statements.into_boxed_slice(),
         return_type: t,
         args: args.into_boxed_slice(),
-    }
+    })
 }
 
-fn parse_top_level(tokens : &mut VecDeque<Token>) -> TopLevelAst {
-    let t = pass_token(tokens); // TODO : better error handling
+fn parse_top_level(tokens : &mut VecDeque<Token>) -> Result<TopLevelAst, ParserError> {
+    let t = pass_token(tokens)?;
     match t {
         Token::Type(t) => {
             parse_top_level_decl(tokens, t)
         },
-        _ => panic!("Unknown token {:?}", t),
+        _ => Err(ParserError::UnexpectedTok(t)),
     }
 }
 
-pub(crate) fn parse(mut tokens : VecDeque<Token>) -> Vec<TopLevelAst> {
+pub(crate) fn parse(mut tokens : VecDeque<Token>) -> Result<Vec<TopLevelAst>, ParserError> {
     let mut top_level = Vec::new();
     while !tokens.is_empty(){
-        top_level.push(parse_top_level(&mut tokens));
+        top_level.push(parse_top_level(&mut tokens)?);
     }
-    top_level
+    Ok(top_level)
 }

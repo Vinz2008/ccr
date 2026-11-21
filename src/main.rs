@@ -46,7 +46,7 @@ fn main() {
     let preprocessed_contents = preprocess(contents);
     let tokens = lex(&preprocessed_contents).unwrap(); // TODO : better error printing
     dbg!(&tokens);
-    let ast = parse(tokens);
+    let ast = parse(tokens).unwrap(); // TODO : better error printing
     dbg!(&ast);
     let out_path = "out.s".as_ref();
     codegen(ast, out_path);
