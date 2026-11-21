@@ -101,7 +101,6 @@ pub(crate) enum StatementAst {
         var_type: Type,
         val : ExprAst,
     },
-    // TODO : how to implement else if ? in the ast ? or as sugaring as if else in one another ?
     If {
         condition : ExprAst,
         if_body : Box<StatementAst>,
@@ -360,7 +359,6 @@ fn parse_for(tokens : &mut VecDeque<Token>) -> StatementAst {
 
     let init = parse_statement(tokens);
     dbg!(&tokens);
-    //eat_token!(tokens, Token::SemiColon); // TODO : don't need it, because parse_statement already does it, should I change it (a aux function ?)
     let condition = parse_expr(tokens);
     eat_token!(tokens, Token::SemiColon);
     let change = parse_expr(tokens);
