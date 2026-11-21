@@ -44,7 +44,7 @@ fn main() {
     let f = f.expect("missing arg");
     let contents = fs::read_to_string(f).unwrap();
     let preprocessed_contents = preprocess(contents);
-    let tokens = lex(&preprocessed_contents);
+    let tokens = lex(&preprocessed_contents).unwrap(); // TODO : better error printing
     dbg!(&tokens);
     let ast = parse(tokens);
     dbg!(&ast);

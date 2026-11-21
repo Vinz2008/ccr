@@ -4,6 +4,24 @@ use arrayvec::ArrayString;
 
 use crate::types::Type;
 
+#[derive(Debug)]
+pub(crate) enum LexerError {
+    UnexpectedEof,
+    WrongChar {
+        expected : char,
+        got : char,
+    },
+    UnexpectedChar(char),
+    TooLongNumber {
+        nb : Box<str>,
+    },
+    TooLongOp {
+        op : Box<str>,
+    },
+    UnknownOp(Box<str>),
+    WrongType(Box<str>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Operator {
     Plus,
@@ -45,25 +63,28 @@ pub(crate) enum Token {
 
 // TODO : add digraphs ? (<:, :>, <%, %>, etc)
 
-fn eat_char(chars : &mut Peekable<Chars<'_>>, expected_c : char){
-    let c = chars.next().unwrap(); // eat '
+fn eat_char(chars : &mut Peekable<Chars<'_>>, expected_c : char) -> Result<(), LexerError> {
+    let c = chars.next().ok_or(LexerError::UnexpectedEof)?; // eat '
     if c != expected_c {
-        panic!("expected char {}, got {}", expected_c, c);
+        return Err(LexerError::WrongChar { expected: expected_c, got: c });
     }
+    Ok(())
 }
 
-fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
+fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Result<(), LexerError> {
     let mut numbers = ArrayString::<19>::new();
     let mut c = chars.peek().copied();
     while let Some('0'..='9') = c {
-        chars.next().unwrap();
-        numbers.try_push(c.unwrap()).expect("too big of a number in int lex");
+        let c_u = c.unwrap();
+        chars.next().ok_or(LexerError::UnexpectedEof)?;
+        numbers.try_push(c_u).map_err(|_| LexerError::TooLongNumber { nb: format!("{}{}", numbers, c_u).into_boxed_str() })?;
         c = chars.peek().copied();
     }
 
     // TODO : optimize this by transforming to a smaller number like i64, i32, etc, if small (will it really optimize it ? test it)
     let nb = numbers.as_str().parse::<u128>().unwrap();
     tokens.push_back(Token::Number(nb));
+    Ok(())
 }
 
 const BINOP_CHARS : &[char] = &[
@@ -72,33 +93,35 @@ const BINOP_CHARS : &[char] = &[
 
 const MAX_OP_LEN : usize = 2;
 
-fn lex_single_line_comment(chars : &mut Peekable<Chars<'_>>){
+fn lex_single_line_comment(chars : &mut Peekable<Chars<'_>>) -> Result<(), LexerError>{
     while let Some(c) = chars.peek() && *c != '\n' {
-        chars.next().unwrap();
+        chars.next().ok_or(LexerError::UnexpectedEof)?;
     }
     if let Some(c) = chars.peek() && *c == '\n' {
-        chars.next().unwrap();
+        chars.next().ok_or(LexerError::UnexpectedEof)?;
     }
+    Ok(())
 }
 
-fn lex_multi_line_comment(chars : &mut Peekable<Chars<'_>>){
+fn lex_multi_line_comment(chars : &mut Peekable<Chars<'_>>) -> Result<(), LexerError> {
     loop {
         if let Some('*') = chars.peek(){
-            chars.next().unwrap();
+            chars.next().ok_or(LexerError::UnexpectedEof)?;
             if let Some('/') = chars.peek(){
                 break;
             }
         } else {
-            chars.next().unwrap();
+            chars.next().ok_or(LexerError::UnexpectedEof)?;
         }
     }
+    Ok(())
 }
 
-fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
+fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Result<(), LexerError> {
     let mut binop : ArrayString<MAX_OP_LEN> = ArrayString::new();
     while let Some(&c) = chars.peek() && BINOP_CHARS.contains(&c){
-        chars.next().unwrap();
-        binop.try_push(c).expect("too long operator");
+        chars.next().ok_or(LexerError::UnexpectedEof)?;
+        binop.try_push(c).map_err(|_| LexerError::TooLongOp { op: format!("{}{}", binop, c).into_boxed_str() })?;
     }
     let binop = match binop.as_ref() {
         "+" => Operator::Plus,
@@ -114,62 +137,62 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
         "++" => Operator::PlusPlus,
         "--" => Operator::MinusMinus,
         "//" => {
-            lex_single_line_comment(chars);
-            return;
+            return lex_single_line_comment(chars);
         }
         "/*" => {
-            lex_multi_line_comment(chars);
-            return;
+            return lex_multi_line_comment(chars);
         }
-        op => panic!("unknown op {}", op),
+        op => return Err(LexerError::UnknownOp(Box::from(op))),
     };
     
     tokens.push_back(Token::Operator(binop));
+    Ok(())
 }
 
-fn lex_identifier_inner(chars : &mut Peekable<Chars<'_>>) -> String {
+fn lex_identifier_inner(chars : &mut Peekable<Chars<'_>>) -> Result<String, LexerError> {
     let mut identifier = String::new();
     let mut c = chars.peek().copied();
     while let Some('a'..='z' | 'A'..='Z' | '_' | '0'..='9') = c {
-        chars.next().unwrap();
+        chars.next().ok_or(LexerError::UnexpectedEof)?;
         identifier.push(c.unwrap());
         c = chars.peek().copied();
     }
-    return identifier;
+    Ok(identifier)
 }
 
-fn pass_space(chars : &mut Peekable<Chars<'_>>){
+fn pass_space(chars : &mut Peekable<Chars<'_>>) -> Result<(), LexerError> {
     while let Some(c) = chars.peek().copied() && c.is_whitespace() {
-        chars.next().unwrap();
+        chars.next().ok_or(LexerError::UnexpectedEof)?;
     }
+    Ok(())
 }
 
-fn lex_identifier_for_type(chars : &mut Peekable<Chars<'_>>) -> String {
-    pass_space(chars);
-    return lex_identifier_inner(chars);
+fn lex_identifier_for_type(chars : &mut Peekable<Chars<'_>>) -> Result<String, LexerError> {
+    pass_space(chars)?;
+    lex_identifier_inner(chars)
 }
 
 // TODO : add const in the type (need to make Type a struct with a is_const bool and a type inner enum)
-fn lex_type_inner(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : bool) -> Type {
+fn lex_type_inner(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : bool) -> Result<Type, LexerError> {
     let mut res_type = match ident {
         "char" => Type::Char,
         "short" => Type::Short,
         "int" => Type::Int,
         "long" => Type::Long,
-        _ => panic!("wrong type"),
+        _ => return Err(LexerError::WrongType(Box::from(ident))),
     };
-    pass_space(chars);
+    pass_space(chars)?;
     while let Some('*') = chars.peek().copied(){
         res_type = Type::Ptr(Box::new(res_type));
-        chars.next().unwrap();
+        chars.next().ok_or(LexerError::UnexpectedEof)?;
     }
-    res_type
+    Ok(res_type)
 }
 
-fn lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str) -> Type {
+fn lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str) -> Result<Type, LexerError> {
     match ident {
         "const" => {
-            let next_ident = lex_identifier_for_type(chars);
+            let next_ident = lex_identifier_for_type(chars)?;
             lex_type_inner(chars, &next_ident, true)
         },
         _ => {
@@ -178,10 +201,10 @@ fn lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str) -> Type {
     }
 }
 
-fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
-    let identifier = lex_identifier_inner(chars);
+fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Result<(), LexerError>{
+    let identifier = lex_identifier_inner(chars)?;
     let tok = match identifier.as_str() {
-        "char" | "short" | "int" | "long" | "const"  => Token::Type(lex_type(chars, identifier.as_str())), // TODO : add more types
+        "char" | "short" | "int" | "long" | "const"  => Token::Type(lex_type(chars, identifier.as_str())?), // TODO : add more types
         "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,
@@ -190,23 +213,25 @@ fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token
         _ => Token::Identifier(identifier.into_boxed_str()),
     };
     tokens.push_back(tok);
+    Ok(())
 }
 
-fn single_char_tok(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>, tok : Token){
+fn single_char_tok(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>, tok : Token) -> Result<(), LexerError>{
     tokens.push_back(tok);
-    chars.next().unwrap();
+    chars.next().ok_or(LexerError::UnexpectedEof)?;
+    Ok(())
 }
 
-fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>){
-    lex_single_line_comment(chars);
+fn lex_cpp_metadata(chars : &mut Peekable<Chars<'_>>) -> Result<(), LexerError>{
+    lex_single_line_comment(chars)
 }
 
 // TODO : for the string case, could even search for the backlash in a quicker way (simd ? simd in 64 bits reg ?) to find quickly if there is \, and if not to have a fast path
 
-fn lex_char_inner(chars : &mut Peekable<Chars<'_>>) -> char {
-    let mut c = chars.next().unwrap();
+fn lex_char_inner(chars : &mut Peekable<Chars<'_>>) -> Result<char, LexerError> {
+    let mut c = chars.next().ok_or(LexerError::UnexpectedEof)?;
     if c == '\\' {
-        let escape_c = chars.next().unwrap();
+        let escape_c = chars.next().ok_or(LexerError::UnexpectedEof)?;
         // TODO : could use a big table instead (would need to make mandatory chars here ascii, but then why not make the lexing be on bytes to not have decoding overhead)
         // TODO : \x and \o
         c = match escape_c {
@@ -221,37 +246,39 @@ fn lex_char_inner(chars : &mut Peekable<Chars<'_>>) -> char {
             _ => escape_c,
         };
     };
-    c
+    Ok(c)
 }
 
-fn lex_char_lit(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
-    eat_char(chars, '\'');
-    let c = lex_char_inner(chars);
+fn lex_char_lit(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Result<(), LexerError>{
+    eat_char(chars, '\'')?;
+    let c = lex_char_inner(chars)?;
     tokens.push_back(Token::Char(c));
-    eat_char(chars, '\'');
+    eat_char(chars, '\'')?;
+    Ok(())
 }
 
-fn lex_string(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>){
-    eat_char(chars, '\"');
+fn lex_string(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Result<(), LexerError>{
+    eat_char(chars, '\"')?;
     let mut str = String::new();
     let mut c = chars.peek().copied();
     while let Some(c_) = c && c_ != '"' {
-        let lexed_char = lex_char_inner(chars);
+        let lexed_char = lex_char_inner(chars)?;
         str.push(lexed_char);
         c = chars.peek().copied();
     }
-    eat_char(chars, '\"');
+    eat_char(chars, '\"')?;
     tokens.push_back(Token::String(str.into_boxed_str()));
+    Ok(())
 }
 
 // TODO : add line infos to the tokens (should I make a token a struct ? should I have a separate VecDequeue for line infos ?)
 
-pub(crate) fn lex(s : &str) -> VecDeque<Token> {
+pub(crate) fn lex(s : &str) -> Result<VecDeque<Token>, LexerError> {
     let mut chars = s.chars().peekable();
     let mut tokens = VecDeque::new();
     while let Some(&c) = chars.peek() {
         if c.is_whitespace() {
-            chars.next().unwrap();
+            chars.next().ok_or(LexerError::UnexpectedEof)?;
             continue;
         }
         match c {
@@ -259,9 +286,7 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
             c if BINOP_CHARS.contains(&c) => lex_op(&mut chars, &mut tokens),
             'a'..='z' | 'A'..='Z' | '_' => lex_identifier(&mut chars, &mut tokens),
             '(' => single_char_tok(&mut chars, &mut tokens, Token::LeftParen),
-            ')' => {
-                single_char_tok(&mut chars, &mut tokens, Token::RightParen);
-            },
+            ')' => single_char_tok(&mut chars, &mut tokens, Token::RightParen),
             '{' => single_char_tok(&mut chars, &mut tokens, Token::LeftBrace),
             '}' => single_char_tok(&mut chars, &mut tokens, Token::RightBrace),
             ',' => single_char_tok(&mut chars, &mut tokens, Token::Colon),
@@ -269,8 +294,8 @@ pub(crate) fn lex(s : &str) -> VecDeque<Token> {
             '#' => lex_cpp_metadata(&mut chars),
             '\'' => lex_char_lit(&mut chars, &mut tokens),
             '"' => lex_string(&mut chars, &mut tokens),
-            _ => panic!("Unknown token '{}'", c),
-        }
+            _ => return Err(LexerError::UnexpectedChar(c)),
+        }?
     }
-    tokens
+    Ok(tokens)
 }
