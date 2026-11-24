@@ -366,7 +366,6 @@ fn parse_for(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError>
     eat_token!(tokens, Token::LeftParen);
 
     let init = parse_statement(tokens)?;
-    dbg!(&tokens);
     let condition = parse_expr(tokens)?;
     eat_token!(tokens, Token::SemiColon);
     let change = parse_expr(tokens)?;
@@ -383,7 +382,6 @@ fn parse_for(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError>
 
 fn parse_statement(tokens : &mut VecDeque<Token>) -> Result<StatementAst, ParserError> {
     let t = tokens.front().ok_or(ParserError::UnexpectedEof)?;
-    dbg!(&t);
     let mut need_semicolon = true;
     let statement = match t {
         Token::Return => {

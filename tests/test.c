@@ -1,3 +1,5 @@
+// TODO : refactor these calls to have better names for files
+
 int f(int arg){
     return 2 * arg + 4 + (-2);
 }

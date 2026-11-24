@@ -1,4 +1,5 @@
-#include <stdio.h>
+// TODO
+// #include <stdio.h>
 
 int f(int arg){
     return 2 * arg + 2;

@@ -1,3 +1,4 @@
 /target
 *.s
 a.out
+tests/a.out

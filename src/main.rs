@@ -31,12 +31,16 @@ fn main() {
     let mut should_link = true;
     let mut should_assemble = true;
     let mut f = None;
-    for arg in env::args(){
+    let mut output_file = "a.out".to_string();
+    let mut args_iter = env::args().skip(1);
+    while let Some(arg) = args_iter.next() {
         if arg == "-S" {
             should_assemble = false;
             should_link = false;
         } else if arg == "-c" {
             should_link = false;
+        } else if arg == "-o" {
+            output_file = args_iter.next().expect("missing output file after -o");
         } else {
             f = Some(arg);
         }
@@ -45,14 +49,14 @@ fn main() {
     let contents = fs::read_to_string(f).unwrap();
     let preprocessed_contents = preprocess(contents);
     let tokens = lex(&preprocessed_contents).unwrap(); // TODO : better error printing (use ariadne)
-    dbg!(&tokens);
+    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), &tokens);
     let ast = parse(tokens).unwrap(); // TODO : better error printing
-    dbg!(&ast);
-    let out_path = "out.s".as_ref();
-    codegen(ast, out_path).unwrap(); // TODO : better error printing
+    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), &ast);
+    let asm_path = "out.s".as_ref();
+    codegen(ast, asm_path).unwrap(); // TODO : better error printing
     if should_link {
-        link(out_path);
+        link(asm_path, output_file.as_ref());
     } else if should_assemble {
-        assemble(out_path);
+        assemble(asm_path);
     }
 }
