@@ -27,7 +27,7 @@ def run_test(test_file):
         print("✅")
     else:
         print("❌")
-    # TODO : check exit code and stderr of compiler
+    # TODO : check stderr of compiler
     # TODO : run the executable generated
 
 # TODO : rebuild the compiler
