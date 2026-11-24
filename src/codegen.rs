@@ -255,6 +255,7 @@ impl CodegenContext {
 
     fn get_var_stack_offset(&mut self, size : u32) -> u32 {
         self.current_stack_offset += size;
+        // TODO : add to rsp (then need to remove from it when ending the scope ?) ?
         self.current_stack_offset
     }
 
