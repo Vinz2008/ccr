@@ -157,12 +157,14 @@ pub(crate) struct Var {
 
 struct Scope {
     vars : FxHashSet<Box<str>>,
+    old_stack_off : u32,
 }
 
 impl Scope {
-    fn new() -> Scope {
+    fn new(old_stack_off : u32) -> Scope {
         Scope { 
-            vars: FxHashSet::default() 
+            vars: FxHashSet::default(),
+            old_stack_off, 
         }
     }
 }
@@ -255,6 +257,7 @@ impl CodegenContext {
         self.current_stack_offset += size;
         self.current_stack_offset
     }
+
     fn reset_stack_offset(&mut self){
         // TODO : change this after pushing selectively ?
         self.current_stack_offset = (CALLEE_SAVED_REGS.len() * 8) as u32;
@@ -273,7 +276,7 @@ impl CodegenContext {
     }
 
     fn start_scope(&mut self){
-        self.scopes.push(Scope::new());
+        self.scopes.push(Scope::new(self.current_stack_offset));
     }
 
     fn end_scope(&mut self){
@@ -281,6 +284,7 @@ impl CodegenContext {
         for var in removed_scope.vars {
             self.vars.remove(&var).unwrap();
         }
+        self.current_stack_offset = removed_scope.old_stack_off;
     }
 
     fn last_scope(&mut self) -> &mut Scope {
