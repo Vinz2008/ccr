@@ -7,6 +7,11 @@ use crate::{lexer::Operator, parser::{Arg, BinaryOp, ExprAst, PostfixOp, Stateme
 
 // TODO : split this file in multiple files (maybe have a codegen/ folder)
 
+#[derive(Debug)]
+pub(crate) enum CodegenError {
+    VarNotFound(Box<str>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 enum Reg {
@@ -459,7 +464,7 @@ fn codegen_char(c : char) -> Value {
     Value::Constant(c as i64)
 }
 
-fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &ExprAst, assign_type : &Type) -> Value {
+fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &ExprAst, assign_type : &Type) -> Result<Value, CodegenError> {
     // TODO : instead of this, just use a function that will be used for & to get the addr of an expr ?
     let mem_addr = match lhs {
         ExprAst::VarUse(var_ident) => {
@@ -469,12 +474,12 @@ fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &
         },
         _ => panic!("lvalue not implemented : {:?}", lhs),
     };
-    let rhs = codegen_expr(codegen_context, rhs);
+    let rhs = codegen_expr(codegen_context, rhs)?;
 
     let asm_type = asm_type_from_type(assign_type);
     emit_mov(codegen_context, &WriteVal::Mem(mem_addr), rhs.clone(), asm_type);
 
-    rhs
+    Ok(rhs)
 }
 
 // TODO : need to add the type conversions (for ex when adding a constant that has been put in a 64 bit reg and a 32 bit add with a var)
@@ -498,13 +503,13 @@ fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type
     }
 }
 
-fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinaryOp, rhs : &ExprAst, expr_type : &Type) -> Value {
+fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinaryOp, rhs : &ExprAst, expr_type : &Type) -> Result<Value, CodegenError> {
     if op == BinaryOp::Equal {
         return codegen_assign(codegen_context, lhs, rhs, expr_type);
     }
 
-    let mut lhs_val = codegen_expr(codegen_context, lhs);
-    let mut rhs_val = codegen_expr(codegen_context, rhs);
+    let mut lhs_val = codegen_expr(codegen_context, lhs)?;
+    let mut rhs_val = codegen_expr(codegen_context, rhs)?;
     match (&lhs_val, &rhs_val){
         // TODO : add also mem
         (Value::Constant(_), Value::Reg(_)) => {
@@ -561,20 +566,20 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
 
     codegen_context.unused_value(rhs_val);
 
-    res_write_val.into()
+    Ok(res_write_val.into())
 }
 
-fn codegen_infix(codegen_context : &mut CodegenContext, op : Operator, val : &ExprAst, expr_type : &Type) -> Value {
+fn codegen_infix(codegen_context : &mut CodegenContext, op : Operator, val : &ExprAst, expr_type : &Type) -> Result<Value, CodegenError> {
     match (op, val){
         (Operator::Minus, &ExprAst::Number(nb)) => {
             let nb : i128 = nb.try_into().unwrap();
             let nb : i64 = (-nb).try_into().unwrap();
-            return Value::Constant(nb);
+            return Ok(Value::Constant(nb));
         }
         _ => {}
     }
 
-    let val = codegen_expr(codegen_context, val);
+    let val = codegen_expr(codegen_context, val)?;
 
     let reg_type = asm_type_from_type(expr_type);
 
@@ -585,7 +590,7 @@ fn codegen_infix(codegen_context : &mut CodegenContext, op : Operator, val : &Ex
         _ => unreachable!(), 
     }
 
-    val
+    Ok(val)
 }
 
 fn codegen_postfix(codegen_context : &mut CodegenContext, val : &ExprAst, op : PostfixOp, expr_type : &Type) -> Value {
@@ -616,11 +621,11 @@ fn codegen_postfix(codegen_context : &mut CodegenContext, val : &ExprAst, op : P
     }
 }
 
-fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Value {
+fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Result<Value, CodegenError> {
     match var_name {
         "__func__" => {
             let str = codegen_context.current_fun_name.as_ref().unwrap().clone();
-            return codegen_string(codegen_context, str.as_ref());
+            return Ok(codegen_string(codegen_context, str.as_ref()));
         },
         _ => {},
     }
@@ -628,19 +633,19 @@ fn codegen_var_use(codegen_context : &mut CodegenContext, var_name : &str) -> Va
     let reg = codegen_context.next_reg().unwrap();
     let var = match codegen_context.vars.get(var_name){
         Some(var) => var,
-        None => panic!("var not found : {}", var_name),
+        None => return Err(CodegenError::VarNotFound(Box::from(var_name))),
     };
     let stack_offset = var.stack_offset.unwrap();
     let var_type = &var.var_type;
     let mov_type = asm_type_from_type(var_type);
     emit_mov(codegen_context, &WriteVal::Reg(reg), Value::Mem(mem_addr_from_stack_off(stack_offset)), mov_type);
-    Value::Reg(reg)
+    Ok(Value::Reg(reg))
 }
 
-fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, args : &[ExprAst]) -> Value {
+fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, args : &[ExprAst]) -> Result<Value, CodegenError> {
     let ret_type = fun.get_type(&codegen_context.vars).into_function_type().unwrap().ret_type;
     let asm_ret_type = asm_type_from_type(&ret_type);
-    let mut args_values = args.iter().map(|arg| codegen_expr(codegen_context, arg)).collect::<Box<_>>();
+    let mut args_values = args.iter().map(|arg| codegen_expr(codegen_context, arg)).collect::<Result<Box<_>, _>>()?;
     let args_types = args.iter().map(|arg| arg.get_type(&codegen_context.vars)).collect::<Box<_>>();
     let args_asm_types = args_types.iter().map(asm_type_from_type).collect::<Box<_>>();
 
@@ -706,7 +711,7 @@ fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, 
         codegen_context.unused_value(arg);
     }
 
-    Value::Reg(Reg::Rax)
+    Ok(Value::Reg(Reg::Rax))
 }
 
 fn codegen_string(codegen_context : &mut CodegenContext, str : &str) -> Value {
@@ -718,35 +723,36 @@ fn codegen_string(codegen_context : &mut CodegenContext, str : &str) -> Value {
     Value::Reg(new_reg)
 }
 
-fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Value {
-    match ast {
+fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Result<Value, CodegenError> {
+    let v = match ast {
         ExprAst::Number(nb) => codegen_number(*nb),
         ExprAst::Char(c) => codegen_char(*c),
-        ExprAst::VarUse(var_name) => codegen_var_use(codegen_context, var_name),
+        ExprAst::VarUse(var_name) => codegen_var_use(codegen_context, var_name)?,
         ExprAst::BinOp { lhs, op, rhs } => {
             let expr_type = ast.get_type(&codegen_context.vars);
-            codegen_binop(codegen_context, lhs.as_ref(), *op, rhs.as_ref(), &expr_type)
+            codegen_binop(codegen_context, lhs.as_ref(), *op, rhs.as_ref(), &expr_type)?
         },
         ExprAst::InfixOp { op, val } => {
             let expr_type = ast.get_type(&codegen_context.vars);
-            codegen_infix(codegen_context, *op, val.as_ref(), &expr_type)
+            codegen_infix(codegen_context, *op, val.as_ref(), &expr_type)?
         }
         ExprAst::PostfixOp { val, op } => {
             let expr_type = ast.get_type(&codegen_context.vars);
             codegen_postfix(codegen_context, val, *op, &expr_type)
         }
         ExprAst::FunctionCall { fun, args } => {
-            codegen_function_call(codegen_context, fun.as_ref(), args)
+            codegen_function_call(codegen_context, fun.as_ref(), args)?
         }
         ExprAst::String(str) => codegen_string(codegen_context, str),
         //_ => panic!("Unknown ast node : {:?}", ast),
-    }
+    };
+    Ok(v)
 }
 
 // TODO : should I add auto insert of return 0 for main
 
-fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) {
-    let val = codegen_expr(codegen_context, val);
+fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) -> Result<(), CodegenError> {
+    let val = codegen_expr(codegen_context, val)?;
     let mov_type = asm_type_from_type(&codegen_context.current_fun_return_type);
     emit_mov(codegen_context, &WriteVal::Reg(Reg::Rax), val, mov_type);
     emit_binary_instr(codegen_context, "add", &WriteVal::Reg(Reg::Rsp), &Value::Constant(24), AsmType::Qword);
@@ -755,6 +761,7 @@ fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) {
     }
     codegen_context.asm_out.push_str(FUN_EPILOGUE);
     codegen_context.asm_out.push_str("\tret\n"); // TODO : have a method on a new type for the tab
+    Ok(())
 }
 
 fn type_size(var_type : &Type) -> u32 {
@@ -779,10 +786,10 @@ fn mem_addr_from_stack_off(stack_offset : u32) -> MemAddr {
     MemAddr::Offset { reg: Reg::Rbp, off: Offset::Constant(-(stack_offset as i32)) }
 }
 
-fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type : &Type, val : &ExprAst){
+fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type : &Type, val : &ExprAst) -> Result<(), CodegenError> {
     // TODO : add real scopes support (to reuse stack vars)
 
-    let val = codegen_expr(codegen_context, val);
+    let val = codegen_expr(codegen_context, val)?;
     let type_size = type_size(var_type);
     let stack_offset = codegen_context.get_var_stack_offset(type_size);
     codegen_context.add_var(Box::from(name), Var { 
@@ -795,10 +802,11 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
     let mov_type = asm_type_from_type(var_type);
     emit_mov(codegen_context, &var_mem, val.clone(), mov_type);
     codegen_context.unused_value(val);
+    Ok(())
 }
 
-fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &StatementAst, else_body : Option<&StatementAst>){
-    let condition_val = codegen_expr(codegen_context, condition);
+fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_body : &StatementAst, else_body : Option<&StatementAst>) -> Result<(), CodegenError> {
+    let condition_val = codegen_expr(codegen_context, condition)?;
 
     
     let condition_write_val = condition_val.clone().into_write_val(codegen_context);
@@ -808,7 +816,7 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
     let if_false_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "\tjz {}", if_false_label).unwrap();
     writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
-    codegen_statement(codegen_context, if_body);
+    codegen_statement(codegen_context, if_body)?;
 
     let end_label = match else_body {
         Some(else_body)=> {
@@ -819,7 +827,7 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
             writeln!(codegen_context.asm_out, "# else body {}", if_idx).unwrap();
             writeln!(codegen_context.asm_out, "{}:", else_label).unwrap();
 
-            codegen_statement(codegen_context, else_body);
+            codegen_statement(codegen_context, else_body)?;
 
             end_label
         }
@@ -828,77 +836,83 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
     writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
     writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
     codegen_context.unused_value(condition_val);
+    Ok(())
 }
 
-fn codegen_scope(codegen_context : &mut CodegenContext, body : &[StatementAst]){
+fn codegen_scope(codegen_context : &mut CodegenContext, body : &[StatementAst]) -> Result<(), CodegenError> {
     codegen_context.start_scope();
     for statement in body {
-        codegen_statement(codegen_context, statement);
+        codegen_statement(codegen_context, statement)?;
     }
     codegen_context.end_scope();
+    Ok(())
 }
 
-fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, while_body : &StatementAst){
+fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, while_body : &StatementAst) -> Result<(), CodegenError> {
     let while_idx = codegen_context.next_idx();
     let cond_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "# while condition {}", while_idx).unwrap();
     writeln!(codegen_context.asm_out, "{}:", cond_label).unwrap();
     
-    let condition_val = codegen_expr(codegen_context, condition);
+    let condition_val = codegen_expr(codegen_context, condition)?;
     let condition_write_val = condition_val.clone().into_write_val(codegen_context);
     emit_binary_instr(codegen_context, "test", &condition_write_val, &condition_val, AsmType::Dword);
     let end_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
 
     writeln!(codegen_context.asm_out, "# while body {}", while_idx).unwrap();
-    codegen_statement(codegen_context, while_body);
+    codegen_statement(codegen_context, while_body)?;
 
     writeln!(codegen_context.asm_out, "\tjmp {}", cond_label).unwrap();
 
     writeln!(codegen_context.asm_out, "# end while {}", while_idx).unwrap();
     writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    Ok(())
 }
 
-fn codegen_for(codegen_context : &mut CodegenContext, init : &StatementAst, condition : &ExprAst, change : &ExprAst, for_body : &StatementAst){
+fn codegen_for(codegen_context : &mut CodegenContext, init : &StatementAst, condition : &ExprAst, change : &ExprAst, for_body : &StatementAst) -> Result<(), CodegenError> {
     let for_idx = codegen_context.next_idx();
     writeln!(codegen_context.asm_out, "# for init {}", for_idx).unwrap();
-    codegen_statement(codegen_context, init);
+    codegen_statement(codegen_context, init)?;
 
     let cond_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "# for condition {}", for_idx).unwrap();
     writeln!(codegen_context.asm_out, "{}:", cond_label).unwrap();
     
-    let condition_val = codegen_expr(codegen_context, condition);
+    let condition_val = codegen_expr(codegen_context, condition)?;
     let condition_write_val = condition_val.clone().into_write_val(codegen_context);
     emit_binary_instr(codegen_context, "test", &condition_write_val, &condition_val, AsmType::Dword);
     let end_label = codegen_context.next_label_str();
     writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
 
     writeln!(codegen_context.asm_out, "# for body {}", for_idx).unwrap();
-    codegen_statement(codegen_context, for_body);
+    codegen_statement(codegen_context, for_body)?;
 
     writeln!(codegen_context.asm_out, "# for change {}", for_idx).unwrap();
 
-    codegen_expr(codegen_context, change);
+    codegen_expr(codegen_context, change)?;
 
     writeln!(codegen_context.asm_out, "\tjmp {}", cond_label).unwrap();
 
     writeln!(codegen_context.asm_out, "# end for {}", for_idx).unwrap();
     writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    Ok(())
 }
 
-fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst){
+fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst) -> Result<(), CodegenError> {
     match ast {
         StatementAst::Return(val) => codegen_return(codegen_context, val),
         StatementAst::Var { name, var_type, val } => codegen_var_decl(codegen_context, name, var_type, val),
         StatementAst::If { condition, if_body, else_body } => codegen_if(codegen_context, condition, if_body.as_ref(), else_body.as_deref()),
         StatementAst::While { condition, body } => codegen_while(codegen_context, condition, body),
         StatementAst::For { init, condition, change, for_body } => codegen_for(codegen_context, init, condition, change, for_body),
-        StatementAst::Scope { body } => codegen_scope(codegen_context, body),
-        StatementAst::Expr(e) => {
-            codegen_expr(codegen_context, e);
+        StatementAst::Scope { body } => {
+            codegen_scope(codegen_context, body)
         },
-    };
+        StatementAst::Expr(e) => {
+            codegen_expr(codegen_context, e).map(|_| ())
+        },
+    }
 }
 
 // TODO : omit the function prelude and epilogue if functions don't call any other functions and use no vars
@@ -931,7 +945,7 @@ const CALLEE_SAVED_REGS : &[Reg] = &[
 ];
 
 // TODO : add .type	[FUNCTION NAME], @function and add .size [FUNCTION NAME], .-[FUNCTION NAME] like in gcc
-fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[StatementAst], return_type : &Type, args : &[Arg]){
+fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[StatementAst], return_type : &Type, args : &[Arg]) -> Result<(), CodegenError> {
     if args.len() > MAX_ARGS {
         panic!("too much args"); // TODO : remove maximum (pass on the stack ? see amd64 c abi)
     }
@@ -975,7 +989,7 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
 
     codegen_context.start_scope();
     for statement in body {
-        codegen_statement(codegen_context, statement);
+        codegen_statement(codegen_context, statement)?;
     }
     codegen_context.end_scope();
 
@@ -990,6 +1004,8 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
         ret_type: return_type.clone(),
         args_type,
     })), stack_offset: None });
+
+    Ok(())
 }
 
 fn codegen_func_proto(codegen_context : &mut CodegenContext, name : &str, return_type : &Type, args : &[Arg]){
@@ -1000,20 +1016,24 @@ fn codegen_func_proto(codegen_context : &mut CodegenContext, name : &str, return
     })), stack_offset: None });
 }
 
-fn codegen_toplevel(codegen_context : &mut CodegenContext, top_level_ast : &TopLevelAst){
+fn codegen_toplevel(codegen_context : &mut CodegenContext, top_level_ast : &TopLevelAst) -> Result<(), CodegenError> {
     match top_level_ast {
         TopLevelAst::Function { name, body, return_type, args } => codegen_function(codegen_context, name, body, return_type, args),
-        TopLevelAst::FuncProto { name, args, return_type } => codegen_func_proto(codegen_context, name, return_type, args),
+        TopLevelAst::FuncProto { name, args, return_type } => {
+            codegen_func_proto(codegen_context, name, return_type, args);
+            Ok(())
+        },
     }
 }
 
-pub(crate) fn codegen(ast : Vec<TopLevelAst>, out_path : &Path){
+pub(crate) fn codegen(ast : Vec<TopLevelAst>, out_path : &Path) -> Result<(), CodegenError> {
     let mut codegen_context = CodegenContext::new();
     codegen_context.start_scope(); // start global scope
     for a in ast {
-        codegen_toplevel(&mut codegen_context, &a);
+        codegen_toplevel(&mut codegen_context, &a)?;
     }
     codegen_context.finish();
     let mut f = File::create(out_path).unwrap();
     f.write_all(codegen_context.asm_out.as_bytes()).unwrap();
+    Ok(())
 }

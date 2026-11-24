@@ -49,7 +49,7 @@ fn main() {
     let ast = parse(tokens).unwrap(); // TODO : better error printing
     dbg!(&ast);
     let out_path = "out.s".as_ref();
-    codegen(ast, out_path);
+    codegen(ast, out_path).unwrap(); // TODO : better error printing
     if should_link {
         link(out_path);
     } else if should_assemble {
