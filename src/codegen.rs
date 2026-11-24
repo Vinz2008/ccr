@@ -292,10 +292,12 @@ impl CodegenContext {
     }
 
     fn finish(&mut self){
-        writeln!(&mut self.asm_out, ".section .rodata").unwrap();
-        for (idx, str) in self.strs_to_emit.iter().enumerate() {
-            writeln!(&mut self.asm_out, ".Lstr{}:", idx).unwrap();
-            writeln!(&mut self.asm_out, "\t.asciz \"{}\"", str).unwrap();
+        if self.strs_to_emit.len() != 0 {
+            writeln!(&mut self.asm_out, ".section .rodata").unwrap();
+            for (idx, str) in self.strs_to_emit.iter().enumerate() {
+                writeln!(&mut self.asm_out, ".Lstr{}:", idx).unwrap();
+                writeln!(&mut self.asm_out, "\t.asciz \"{}\"", str).unwrap();
+            }
         }
     }
 }
