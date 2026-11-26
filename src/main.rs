@@ -13,8 +13,6 @@ mod linker;
 
 // TODO : use a arena allocator (https://crates.io/crates/bumpalo or https://crates.io/crates/blink-alloc)
 
-// TODO : improve cmd parsing (with a struct, and instead of 2 bool for link and assembling, having an enum to have the target of the tool : linking, assembling, etc)
-
 // TODO : add pointers
 // TODO : add sizeof
 // TODO : add casts

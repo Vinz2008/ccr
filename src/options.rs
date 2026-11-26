@@ -1,6 +1,7 @@
 use std::env;
 
 pub(crate) struct Options {
+    // TODO : instead of 2 bool for link and assembling, having an enum to have the target of the tool : linking, assembling, etc
     pub should_link : bool,
     pub should_assemble : bool,
     pub source_file : String,
