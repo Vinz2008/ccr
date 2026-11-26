@@ -1,5 +1,3 @@
-// TODO : do a better test harness
-
 int putchar(int ch);
 
 int main(){

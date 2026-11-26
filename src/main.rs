@@ -1,4 +1,4 @@
-use std::{env, fs, process::{self, ExitCode}};
+use std::{env, fs, process::ExitCode};
 
 use crate::{assembler::assemble, codegen::codegen, lexer::lex, linker::link, parser::parse, preprocessor::preprocess};
 
