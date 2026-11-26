@@ -2,7 +2,7 @@ use std::{collections::VecDeque, iter::Peekable, str::Chars};
 
 use arrayvec::ArrayString;
 
-use crate::types::Type;
+use crate::types::{IntegerType, Sign, Type};
 
 #[derive(Debug)]
 pub(crate) enum LexerError {
@@ -167,19 +167,26 @@ fn pass_space(chars : &mut Peekable<Chars<'_>>) -> Result<(), LexerError> {
     Ok(())
 }
 
+// TODO : maybe refactor the lexing of the type (should I check the grammar for it ? should it be more in parsing instead ?)
+
 fn lex_identifier_for_type(chars : &mut Peekable<Chars<'_>>) -> Result<String, LexerError> {
     pass_space(chars)?;
     lex_identifier_inner(chars)
 }
 
 // TODO : add const in the type (need to make Type a struct with a is_const bool and a type inner enum)
-fn lex_type_inner(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : bool) -> Result<Type, LexerError> {
+fn lex_type_inner(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : bool, is_unsigned : bool) -> Result<Type, LexerError> {
+    let sign = if is_unsigned {
+        Sign::Unsigned
+    } else {
+        Sign::Signed
+    };
     let mut res_type = match ident {
-        "char" => Type::Char,
-        "short" => Type::Short,
-        "int" => Type::Int,
-        "long" => Type::Long,
-        _ => return Err(LexerError::WrongType(Box::from(ident))),
+        "char" => Type::Integer(sign, IntegerType::Char),
+        "short" => Type::Integer(sign, IntegerType::Short),
+        "int" => Type::Integer(sign, IntegerType::Int),
+        "long" => Type::Integer(sign, IntegerType::Long),
+        _ => return Err(LexerError::WrongType(Box::from(ident))), // TODO : also support having just unsigned for the type
     };
     pass_space(chars)?;
     while let Some('*') = chars.peek().copied(){
@@ -189,22 +196,30 @@ fn lex_type_inner(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : boo
     Ok(res_type)
 }
 
-fn lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str) -> Result<Type, LexerError> {
+fn _lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : bool, is_unsigned : bool) -> Result<Type, LexerError> {
     match ident {
-        "const" => {
+        "const" if !is_const => {
             let next_ident = lex_identifier_for_type(chars)?;
-            lex_type_inner(chars, &next_ident, true)
+            _lex_type(chars, &next_ident, true, is_unsigned)
         },
+        "unsigned" if !is_unsigned => {
+            let next_ident = lex_identifier_for_type(chars)?;
+            _lex_type(chars, &next_ident, is_const, true)
+        }
         _ => {
-            lex_type_inner(chars, ident, false)
+            lex_type_inner(chars, ident, is_const, is_unsigned)
         }
     }
+}
+
+fn lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str) -> Result<Type, LexerError> {
+    _lex_type(chars, ident, false, false)
 }
 
 fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Result<(), LexerError>{
     let identifier = lex_identifier_inner(chars)?;
     let tok = match identifier.as_str() {
-        "char" | "short" | "int" | "long" | "const"  => Token::Type(lex_type(chars, identifier.as_str())?), // TODO : add more types
+        "char" | "short" | "int" | "long" | "const" | "unsigned"  => Token::Type(lex_type(chars, identifier.as_str())?), // TODO : add more types
         "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,

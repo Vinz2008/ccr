@@ -14,7 +14,6 @@ mod linker;
 // TODO : use a arena allocator (https://crates.io/crates/bumpalo or https://crates.io/crates/blink-alloc)
 
 // TODO : add pointers
-// TODO : add sizeof
 // TODO : add casts
 // TODO : add arrays
 // TODO : add bitwise operators

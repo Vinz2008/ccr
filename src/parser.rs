@@ -72,7 +72,13 @@ impl TryFrom<Operator> for BinaryOp {
     }
 }
 
-// TODO : make it flat ? (is more optimized, but would complicated mutating it for peep hole opts)
+#[derive(Debug)]
+pub(crate) enum SizeofArg {
+    Type(Type),
+    Expr(Box<ExprAst>),
+}
+
+// TODO : make it flat ? (is more optimized, but would make it more complicated to mutate it for peep hole opts)
 #[derive(Debug)]
 pub(crate) enum ExprAst {
     Number(u128),
@@ -95,7 +101,8 @@ pub(crate) enum ExprAst {
     FunctionCall {
         fun : Box<ExprAst>,
         args : Box<[ExprAst]>,
-    }
+    },
+    Sizeof(SizeofArg),
 }
 
 
@@ -179,11 +186,36 @@ fn pass_token(tokens : &mut VecDeque<Token>) -> Result<Token, ParserError> {
     tokens.pop_front().ok_or(ParserError::UnexpectedEof)
 }
 
+fn parse_sizeof(tokens : &mut VecDeque<Token>) -> Result<ExprAst, ParserError> {
+    eat_token!(tokens, Token::LeftParen);
+    // TODO : generate a dedicated ast node instead ? (to improve error messages ? to then check the validity during codegen ? for ex sizeof(void) makes no sense)
+    let sizeof_arg = match tokens.front() {
+        Some(Token::Type(_)) => {
+            let t = eat_token!(tokens, Token::Type(t), t);
+            SizeofArg::Type(t)
+        },
+        _ => {
+            let e = parse_expr(tokens)?;
+            SizeofArg::Expr(Box::new(e))
+        }
+    };
+    eat_token!(tokens, Token::RightParen);
+    Ok(ExprAst::Sizeof(sizeof_arg))
+}
+
+fn parse_identifier(tokens : &mut VecDeque<Token>, ident : Box<str>) -> Result<ExprAst, ParserError> {
+    let expr = match ident.as_ref() {
+        "sizeof" => parse_sizeof(tokens)?,
+        _ => ExprAst::VarUse(ident),
+    };
+    Ok(expr)
+}
+
 fn parse_primary(tokens : &mut VecDeque<Token>) -> Result<ExprAst, ParserError> {
     let t = pass_token(tokens)?;
     let e = match t {
         Token::Number(nb) => ExprAst::Number(nb),
-        Token::Identifier(ident) => ExprAst::VarUse(ident),
+        Token::Identifier(ident) => parse_identifier(tokens, ident)?,
         Token::Char(c) => ExprAst::Char(c),
         Token::LeftParen => {
             let expr = parse_expr(tokens)?;

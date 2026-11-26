@@ -4,7 +4,7 @@ use std::{collections::hash_map::Entry, fmt::Write as _, fs::File, io::Write as 
 use arrayvec::{ArrayString, ArrayVec};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{lexer::Operator, parser::{Arg, BinaryOp, ExprAst, PostfixOp, StatementAst, TopLevelAst}, types::{FunctionType, Type}};
+use crate::{lexer::Operator, parser::{Arg, BinaryOp, ExprAst, PostfixOp, SizeofArg, StatementAst, TopLevelAst}, types::{FunctionType, IntegerType, Sign, Type}};
 
 // TODO : split this file in multiple files (maybe have a codegen/ folder)
 
@@ -234,7 +234,7 @@ const LABEL_MAX_SIZE : usize = LABEL_PREFIX.len() + 10;
 
 impl CodegenContext {
     fn new() -> CodegenContext {
-        let mut context = CodegenContext { 
+        CodegenContext { 
             asm_buf: AsmBuf::new(),
             value_buf : String::with_capacity(3),
             used_regs: init_used_regs(),
@@ -244,12 +244,11 @@ impl CodegenContext {
             current_stack_offset : 0,
             max_stack_offset: 0,
             current_fun_name: None,
-            current_fun_return_type: Type::Int, // unused value
+            current_fun_return_type: Type::Integer(Sign::Signed, IntegerType::Int), // unused value
             next_idx: 0,
             strs_to_emit: Vec::new(),
             str_idx: 0,
-        };
-        context
+        }
     }
 
     fn next_reg(&mut self) -> Option<Reg> {
@@ -547,18 +546,28 @@ fn codegen_assign(codegen_context : &mut CodegenContext, lhs : &ExprAst, rhs : &
 
 // TODO : make it more general
 
-fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type, to : &Type) -> Value {
-    if from == to {
-        return val;
-    }
-    match (from, to){
-        (Type::Char, Type::Int) => {
+fn codegen_cast_integer(codegen_context : &mut CodegenContext, val : Value, from_sign : Sign, from : &IntegerType, to_sign : Sign, to : &IntegerType) -> Value {
+    // TODO : handle the sign
+    match (from, to) {
+        (IntegerType::Char, IntegerType::Int) => {
             let write_val = val.into_write_val(codegen_context);
             write_val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Dword);
             write!(codegen_context.asm_buf, "\tmovzx {}, ", codegen_context.value_buf).unwrap();
             write_val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Byte);
             writeln!(codegen_context.asm_buf, "{}", codegen_context.value_buf).unwrap();
             write_val.into()
+        }
+        _ => todo!(),
+    }
+}
+
+fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type, to : &Type) -> Value {
+    if from == to {
+        return val;
+    }
+    match (from, to){
+        (Type::Integer(from_sign, from), Type::Integer(to_sign, to)) => {
+            codegen_cast_integer(codegen_context, val, *from_sign, from, *to_sign, to)
         }
         _ => todo!()
     }
@@ -601,26 +610,28 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
     
     // TODO : need to change the comparisons depending if signed or not (currently is signed)
     // TODO : improve this code, so that when it is directly in a if condition, directly produce the jump
+    let char_type = Type::Integer(Sign::Signed, IntegerType::Char);
+    let int_type = Type::Integer(Sign::Signed, IntegerType::Int);
     match op {
         BinaryOp::Cmp => {
             emit_single_op_instr(codegen_context, "sete", &res_write_val.clone().into(), AsmType::Byte);
-            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &char_type, &int_type).into_write_val(codegen_context);
         },
         BinaryOp::Lower => {
             emit_single_op_instr(codegen_context, "setl", &res_write_val.clone().into(), AsmType::Byte);
-            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &char_type, &int_type).into_write_val(codegen_context);
         }
         BinaryOp::Upper => {
             emit_single_op_instr(codegen_context, "setg", &res_write_val.clone().into(), AsmType::Byte);
-            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &char_type, &int_type).into_write_val(codegen_context);
         }
         BinaryOp::LowerEqual => {
             emit_single_op_instr(codegen_context, "setle", &res_write_val.clone().into(), AsmType::Byte);
-            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &char_type, &int_type).into_write_val(codegen_context);
         }
         BinaryOp::UpperEqual => {
             emit_single_op_instr(codegen_context, "setge", &res_write_val.clone().into(), AsmType::Byte);
-            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &Type::Char, &Type::Int).into_write_val(codegen_context);
+            res_write_val = codegen_cast(codegen_context, res_write_val.into(), &char_type, &int_type).into_write_val(codegen_context);
         }
         _ => {},
     }
@@ -784,10 +795,21 @@ fn codegen_string(codegen_context : &mut CodegenContext, str : &str) -> Value {
     Value::Reg(new_reg)
 }
 
+fn codegen_sizeof(codegen_context : &mut CodegenContext, sizeof_arg : &SizeofArg) -> Value {
+    let type_size = match sizeof_arg {
+        SizeofArg::Type(t) => type_size(t),
+        SizeofArg::Expr(e) => {
+            type_size(&e.get_type(&codegen_context.vars))
+        }
+    };
+    Value::Constant(type_size as i64)
+}
+
 fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Result<Value, CodegenError> {
     let v = match ast {
         ExprAst::Number(nb) => codegen_number(*nb),
         ExprAst::Char(c) => codegen_char(*c),
+        ExprAst::Sizeof(sizeof_arg) => codegen_sizeof(codegen_context, sizeof_arg),
         ExprAst::VarUse(var_name) => codegen_var_use(codegen_context, var_name)?,
         ExprAst::BinOp { lhs, op, rhs } => {
             let expr_type = ast.get_type(&codegen_context.vars);
@@ -812,7 +834,7 @@ fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Result
 
 // TODO : should I add auto insert of return 0 for main
 
-const RET_LABEL_PREFIX : &'static str = ".ret";
+const RET_LABEL_PREFIX : &str = ".ret";
 
 fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) -> Result<(), CodegenError> {
     let val = codegen_expr(codegen_context, val)?;
@@ -829,21 +851,35 @@ fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) -> Resu
     Ok(())
 }
 
-fn type_size(var_type : &Type) -> u32 {
+fn type_size_integer(integer_type : IntegerType) -> u32 {
+    match integer_type {
+        IntegerType::Char => 1,
+        IntegerType::Short => 2,
+        IntegerType::Int => 4,
+        IntegerType::Long => 8,
+    }
+}
+
+pub(crate) fn type_size(var_type : &Type) -> u32 {
     match var_type {
-        Type::Char => 1,
-        Type::Short => 2,
-        Type::Int => 4,
-        Type::Long | Type::Function(_) | Type::Ptr { .. } => 8,
+        Type::Integer(_, integer_type) => type_size_integer(*integer_type),
+        Type::Function(_) | Type::Ptr { .. } => 8,
+    }
+}
+
+fn asm_type_from_type_integer(t : IntegerType) -> AsmType{
+    match t {
+        IntegerType::Char => AsmType::Byte,
+        IntegerType::Short => AsmType::Word,
+        IntegerType::Int => AsmType::Dword,
+        IntegerType::Long => AsmType::Qword
     }
 }
 
 fn asm_type_from_type(t : &Type) -> AsmType {
     match t {
-        Type::Char => AsmType::Byte,
-        Type::Short => AsmType::Word,
-        Type::Int => AsmType::Dword,
-        Type::Long | Type::Function(_) | Type::Ptr { .. } => AsmType::Qword,
+        Type::Integer(_, i_t) => asm_type_from_type_integer(*i_t),
+        Type::Function(_) | Type::Ptr { .. } => AsmType::Qword,
     }
 }
 
