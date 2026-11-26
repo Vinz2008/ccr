@@ -11,6 +11,8 @@ fn expr_has_no_side_effects(e : &ExprAst) -> bool {
     }
 }
 
+// TODO : add peep hole optimizations (for ex, when knowing only the rhs of a division that would be 2, then do >> 2)
+
 fn optimize_binop(binop_expr : &mut ExprAst){
     let res = match binop_expr {
         ExprAst::BinOp { lhs, op, rhs } => {
