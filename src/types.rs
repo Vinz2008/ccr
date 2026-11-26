@@ -36,6 +36,13 @@ impl Type {
             _ => None,
         }
     }
+
+    pub(crate) fn as_integer_type(&self) -> Option<(Sign, IntegerType)> {
+        match self {
+            Type::Integer(sign, i_t) => Some((*sign, *i_t)),
+            _ => None,
+        }
+    }
 }
 
 fn guess_lit_nb_type(nb : u128) -> Type {

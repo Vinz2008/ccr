@@ -251,14 +251,18 @@ impl CodegenContext {
         }
     }
 
+    fn mark_reg_as_used(&mut self, reg : Reg){
+        self.used_regs[reg as usize] = true;
+        self.this_fun_used_regs[reg as usize] = true;
+    }
+
     fn next_reg(&mut self) -> Option<Reg> {
         for i in 0..(Reg::Count as u8) {
             if !self.used_regs[i as usize] {
-                self.used_regs[i as usize] = true;
-                self.this_fun_used_regs[i as usize] = true;
                 let reg = unsafe {
                     std::mem::transmute::<u8, Reg>(i)
                 };
+                self.mark_reg_as_used(reg);
                 return Some(reg);
             }
         }
@@ -293,6 +297,7 @@ impl CodegenContext {
         self.used_regs[reg_idx] = false;
     }
 
+    // TODO : align the stack offset to the alignement of the type
     fn get_var_stack_offset(&mut self, size : u32) -> u32 {
         self.current_stack_offset += size;
         if self.current_stack_offset > self.max_stack_offset {
@@ -441,16 +446,26 @@ impl Value {
         }
     }
 
+    fn into_reg(self, codegen_context : &mut CodegenContext) -> Option<Reg> {
+        let reg = match self {
+            Value::Reg(reg) => reg,
+            Value::Mem(_) | Value::Constant(_) => {
+                let reg = codegen_context.next_reg()?;
+                let write_val = WriteVal::Reg(reg);
+                emit_mov(codegen_context, &write_val, self, AsmType::Qword); // TODO : change the movtype ?
+                reg
+            }
+        };
+        Some(reg)
+    }
+
     fn into_write_val(self, codegen_context : &mut CodegenContext) -> WriteVal {
         match self {
             Value::Reg(reg) => WriteVal::Reg(reg),
             Value::Mem(mem) => WriteVal::Mem(mem),
             Value::Constant(_) => {
                 // TODO : spill to memory if no reg left
-                let reg = codegen_context.next_reg().unwrap();
-                let write_val = WriteVal::Reg(reg);
-                emit_mov(codegen_context, &write_val, self, AsmType::Qword); // TODO : change the movtype ?
-                write_val
+                WriteVal::Reg(self.into_reg(codegen_context).unwrap())
             }
         }
     }
@@ -477,7 +492,8 @@ fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &str, 
         instruction = match reg_type {
             AsmType::Qword => format!("{} qword ptr", instruction),
             AsmType::Dword => format!("{} dword ptr", instruction),
-            _ => todo!(),
+            AsmType::Word => format!("{} word ptr", instruction),
+            AsmType::Byte => format!("{} byte ptr", instruction),
         }
     }
     to.to_addressing_str(&mut codegen_context.value_buf, reg_type);
@@ -573,6 +589,71 @@ fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type
     }
 }
 
+fn codegen_div(codegen_context : &mut CodegenContext, lhs_value : Value, rhs_value : Value, div_type : AsmType, sign : Sign, res_reg : Reg, other_reg : Reg) -> Value {
+    // TODO : can I optimize this ?
+    let should_save_other_reg = codegen_context.used_regs[other_reg as usize] && !matches!(lhs_value, Value::Reg(r) if r == other_reg) && !matches!(rhs_value, Value::Reg(r) if r == other_reg);
+    if should_save_other_reg {
+        emit_single_op_instr(codegen_context, "push", &Value::Reg(other_reg), AsmType::Qword);
+    }
+
+    let should_save_res_reg = codegen_context.used_regs[res_reg as usize] && !matches!(lhs_value, Value::Reg(r) if r == res_reg) && !matches!(rhs_value, Value::Reg(r) if r == res_reg);
+    if should_save_res_reg {
+        emit_single_op_instr(codegen_context, "push", &Value::Reg(res_reg), AsmType::Qword);
+    }
+    codegen_context.mark_reg_as_used(res_reg);
+    codegen_context.mark_reg_as_used(other_reg);
+    
+
+    let is_division = res_reg == Reg::Rax;
+    match lhs_value {
+        Value::Reg(Reg::Rax) if is_division => {},
+        _ => {
+            emit_mov(codegen_context, &WriteVal::Reg(Reg::Rax), lhs_value.clone(), div_type);
+            if !matches!(lhs_value, Value::Reg(Reg::Rax) | Value::Reg(Reg::Rdx)){
+                codegen_context.unused_value(lhs_value);
+            }
+        }
+    }
+
+    let instruction = match sign {
+        Sign::Unsigned => {
+            // make rdx all 0, doesn't need to do it use the qword type here, will entirely zero it with just dword, and make it a smaller instruction
+            emit_binary_instr(codegen_context, "xor", &WriteVal::Reg(Reg::Rdx), &Value::Reg(Reg::Rdx), AsmType::Dword);
+            "div"
+        }
+        Sign::Signed => {
+            // sign extend to rdx
+            let instr = match div_type {
+                AsmType::Byte => "cbw",
+                AsmType::Word => "cwd",
+                AsmType::Dword => "cdq",
+                AsmType::Qword => "cqo",
+            };
+            writeln!(codegen_context.asm_buf, "\t{}", instr).unwrap();
+            "idiv"
+        }
+    };
+    
+    let rhs_reg = rhs_value.into_reg(codegen_context).unwrap();
+    writeln!(codegen_context.asm_buf, "\t{} {}", instruction, rhs_reg.to_addressing_str(div_type)).unwrap();
+    codegen_context.unused_value(Value::Reg(rhs_reg));
+
+    let mut final_res_reg = res_reg;
+    if should_save_other_reg {
+        let new_res_reg = codegen_context.next_reg().unwrap();
+        emit_mov(codegen_context, &WriteVal::Reg(new_res_reg),  Value::Reg(res_reg), div_type);
+        final_res_reg = new_res_reg;
+        emit_single_op_instr(codegen_context, "pop", &Value::Reg(res_reg), AsmType::Qword);
+    }
+    if should_save_other_reg{
+        emit_single_op_instr(codegen_context, "pop", &Value::Reg(other_reg), AsmType::Qword);
+    }
+    codegen_context.used_regs[res_reg as usize] = should_save_res_reg;
+    codegen_context.used_regs[other_reg as usize] = should_save_other_reg;
+    codegen_context.used_regs[final_res_reg as usize] = true;
+    Value::Reg(final_res_reg)
+}
+
 fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : BinaryOp, rhs : &ExprAst, expr_type : &Type) -> Result<Value, CodegenError> {
     if op == BinaryOp::Equal {
         return codegen_assign(codegen_context, lhs, rhs, expr_type);
@@ -593,19 +674,29 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
         rhs_val = rhs_val.into_write_val(codegen_context).into();
     }
 
-    // TODO : do I need special handling for the output of some of these (is it always the same as the lhs ?)
+    // TODO : if types smaller than int (short or char), add a cast on the value to make them bigger (with movsx or movzx depending of signed or not)
+
+    let reg_type = asm_type_from_type(expr_type);
+
+    if op == BinaryOp::Div || op == BinaryOp::Rem {
+        let (sign, _) = expr_type.as_integer_type().expect("expected an integer type"); // TODO : better error handling
+        let (res_reg, other_reg) = match op {
+            BinaryOp::Div => (Reg::Rax, Reg::Rdx),
+            BinaryOp::Rem => (Reg::Rdx, Reg::Rax), 
+            _ => unreachable!(),
+        };
+        return Ok(codegen_div(codegen_context, lhs_val, rhs_val, reg_type, sign, res_reg, other_reg));
+    }
+
     let mut res_write_val = lhs_val.into_write_val(codegen_context);
     let instruction = match op {
         BinaryOp::Plus => "add",
         BinaryOp::Minus => "sub",
         BinaryOp::Mult => "imul",
-        BinaryOp::Div => "idiv",
-        BinaryOp::Rem => todo!(), // TODO : need to improve the division part (because the outputs are fixed and also the inputs, so need better reg alloc ?)
         BinaryOp::Cmp | BinaryOp::Lower | BinaryOp::Upper | BinaryOp::LowerEqual | BinaryOp::UpperEqual => "cmp",
-        BinaryOp::Equal => unreachable!(),
+        BinaryOp::Equal | BinaryOp::Div | BinaryOp::Rem  => unreachable!(),
     };
 
-    let reg_type = asm_type_from_type(expr_type);
     emit_binary_instr(codegen_context, instruction, &res_write_val, &rhs_val, reg_type);
     
     // TODO : need to change the comparisons depending if signed or not (currently is signed)
@@ -839,15 +930,9 @@ const RET_LABEL_PREFIX : &str = ".ret";
 fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) -> Result<(), CodegenError> {
     let val = codegen_expr(codegen_context, val)?;
     let mov_type = asm_type_from_type(&codegen_context.current_fun_return_type);
-    emit_mov(codegen_context, &WriteVal::Reg(Reg::Rax), val, mov_type);
+    emit_mov(codegen_context, &WriteVal::Reg(Reg::Rax), val.clone(), mov_type);
     writeln!(codegen_context.asm_buf, "\tjmp {}_{}", RET_LABEL_PREFIX, codegen_context.current_fun_name.as_ref().unwrap()).unwrap();
-    // TODO : change this
-    /*emit_binary_instr(codegen_context, "add", &WriteVal::Reg(Reg::Rsp), &Value::Constant(24), AsmType::Qword);
-    for &reg in CALLEE_SAVED_REGS.iter().rev() {
-        emit_single_op_instr(codegen_context, "pop", &Value::Reg(reg), AsmType::Qword);
-    }
-    codegen_context.asm_buf.push_str(FUN_EPILOGUE);
-    codegen_context.asm_buf.push_str("\tret\n");*/ // TODO : have a method on a new type for the tab
+    codegen_context.unused_value(val);
     Ok(())
 }
 
@@ -968,6 +1053,7 @@ fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, wh
 
     writeln!(codegen_context.asm_buf, "# end while {}", while_idx).unwrap();
     writeln!(codegen_context.asm_buf, "{}:", end_label).unwrap();
+    codegen_context.unused_value(condition_val);
     Ok(())
 }
 
@@ -991,12 +1077,14 @@ fn codegen_for(codegen_context : &mut CodegenContext, init : &StatementAst, cond
 
     writeln!(codegen_context.asm_buf, "# for change {}", for_idx).unwrap();
 
-    codegen_expr(codegen_context, change)?;
+    let change_val = codegen_expr(codegen_context, change)?;
 
     writeln!(codegen_context.asm_buf, "\tjmp {}", cond_label).unwrap();
 
     writeln!(codegen_context.asm_buf, "# end for {}", for_idx).unwrap();
     writeln!(codegen_context.asm_buf, "{}:", end_label).unwrap();
+    codegen_context.unused_value(change_val);
+    codegen_context.unused_value(condition_val);
     Ok(())
 }
 
@@ -1011,7 +1099,9 @@ fn codegen_statement(codegen_context : &mut CodegenContext, ast : &StatementAst)
             codegen_scope(codegen_context, body)
         },
         StatementAst::Expr(e) => {
-            codegen_expr(codegen_context, e).map(|_| ())
+            let val = codegen_expr(codegen_context, e)?;
+            codegen_context.unused_value(val);
+            Ok(())
         },
     }
 }

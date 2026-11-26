@@ -88,7 +88,7 @@ fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Re
 }
 
 const BINOP_CHARS : &[char] = &[
-    '+', '-', '*', '/', '=', '<'
+    '+', '-', '*', '/', '=', '<', '%'
 ];
 
 const MAX_OP_LEN : usize = 2;
@@ -128,6 +128,7 @@ fn lex_op(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Re
         "-" => Operator::Minus,
         "*" => Operator::Mult,
         "/" => Operator::Div,
+        "%" => Operator::Rem,
         "==" => Operator::Cmp,
         "=" => Operator::Equal,
         "<" => Operator::Lower,
