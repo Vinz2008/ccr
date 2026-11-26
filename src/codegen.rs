@@ -735,7 +735,6 @@ fn codegen_binop(codegen_context : &mut CodegenContext, lhs : &ExprAst, op : Bin
 fn codegen_infix(codegen_context : &mut CodegenContext, op : Operator, val : &ExprAst, expr_type : &Type) -> Result<Value, CodegenError> {
     match (op, val){
         (Operator::Minus, &ExprAst::Number(nb)) => {
-            let nb : i128 = nb.try_into().unwrap();
             let nb : i64 = (-nb).try_into().unwrap();
             return Ok(Value::Constant(nb));
         }

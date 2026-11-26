@@ -33,8 +33,7 @@ pub(crate) fn parse_options() -> Options {
             should_link = false;
         } else if arg == "-o" {
             output_file = args_iter.next().expect("missing output file after -o");
-        } else if arg.starts_with("-O"){
-            let opt_str = &arg[2..];
+        } else if let Some(opt_str) = arg.strip_prefix("-O"){
             opt_level = match opt_str {
                 "0" => OptLevel::O0,
                 "1" => OptLevel::O1,
