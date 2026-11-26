@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{collections::hash_map::Entry, fmt::Write as _, fs::File, io::Write as _, mem, path::Path};
 
 use arrayvec::{ArrayString, ArrayVec};
@@ -10,6 +11,7 @@ use crate::{lexer::Operator, parser::{Arg, BinaryOp, ExprAst, PostfixOp, Stateme
 #[derive(Debug)]
 pub(crate) enum CodegenError {
     VarNotFound(Box<str>),
+    VarAlreadyExists(Box<str>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -169,12 +171,49 @@ impl Scope {
     }
 }
 
-struct CodegenContext {
+struct AsmBuf {
     asm_out : String,
+    current_fun : Option<String>,
+}
+
+impl AsmBuf {
+    fn new() -> AsmBuf {
+        AsmBuf { 
+            asm_out: String::from(ASM_TEMPLATE),
+            current_fun: None,
+        }
+    }
+
+    fn push_str(&mut self, s : &str){
+        self.write_str(s).unwrap();
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        match self.current_fun.as_ref(){
+            Some(current_fun) => current_fun.as_bytes(),
+            None => self.asm_out.as_bytes(),
+        }
+    }
+}
+
+impl fmt::Write for AsmBuf {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        match self.current_fun.as_mut(){
+            Some(current_fun) => current_fun.push_str(s),
+            None => self.asm_out.push_str(s),
+        }
+        fmt::Result::Ok(())
+    }
+}
+
+struct CodegenContext {
+    asm_buf : AsmBuf,
     value_buf : String,
     used_regs : [bool; Reg::Count as usize], // TODO : better reg allocation
+    this_fun_used_regs : [bool; Reg::Count as usize],
     vars : FxHashMap<Box<str>, Var>,
     current_stack_offset : u32,
+    max_stack_offset : u32,
     current_fun_name : Option<Box<str>>,
     current_fun_return_type : Type,
     next_idx : u32,
@@ -196,19 +235,20 @@ const LABEL_MAX_SIZE : usize = LABEL_PREFIX.len() + 10;
 impl CodegenContext {
     fn new() -> CodegenContext {
         let mut context = CodegenContext { 
-            asm_out: String::from(ASM_TEMPLATE),
+            asm_buf: AsmBuf::new(),
             value_buf : String::with_capacity(3),
             used_regs: init_used_regs(),
+            this_fun_used_regs: init_used_regs(),
             vars: FxHashMap::default(),
             scopes: Vec::new(),
             current_stack_offset : 0,
+            max_stack_offset: 0,
             current_fun_name: None,
             current_fun_return_type: Type::Int, // unused value
             next_idx: 0,
             strs_to_emit: Vec::new(),
             str_idx: 0,
         };
-        context.reset_stack_offset();
         context
     }
 
@@ -216,6 +256,7 @@ impl CodegenContext {
         for i in 0..(Reg::Count as u8) {
             if !self.used_regs[i as usize] {
                 self.used_regs[i as usize] = true;
+                self.this_fun_used_regs[i as usize] = true;
                 let reg = unsafe {
                     std::mem::transmute::<u8, Reg>(i)
                 };
@@ -255,25 +296,24 @@ impl CodegenContext {
 
     fn get_var_stack_offset(&mut self, size : u32) -> u32 {
         self.current_stack_offset += size;
+        if self.current_stack_offset > self.max_stack_offset {
+            self.max_stack_offset = self.current_stack_offset;
+        }
         // TODO : add to rsp (then need to remove from it when ending the scope ?) ?
         self.current_stack_offset
     }
 
-    fn reset_stack_offset(&mut self){
-        // TODO : change this after pushing selectively ?
-        self.current_stack_offset = (CALLEE_SAVED_REGS.len() * 8) as u32;
-    }
-
-    fn add_var(&mut self, name : Box<str>, var : Var){
+    fn add_var(&mut self, name : Box<str>, var : Var) -> Result<(), CodegenError> {
         let name = match self.vars.entry(name){
             Entry::Vacant(entry) => {
                 let name = entry.key().clone();
                 entry.insert(var);
                 name
             }
-            Entry::Occupied(entry) => panic!("duplicate var {}", entry.key()),
+            Entry::Occupied(entry) => return Err(CodegenError::VarAlreadyExists(entry.key().clone())),
         };
         self.last_scope().vars.insert(name);
+        Ok(())
     }
 
     fn start_scope(&mut self){
@@ -288,16 +328,30 @@ impl CodegenContext {
         self.current_stack_offset = removed_scope.old_stack_off;
     }
 
+    fn start_function(&mut self, name : &str, return_type : &Type){
+        self.current_fun_name = Some(Box::from(name));
+        self.current_fun_return_type = return_type.clone();
+        self.used_regs = init_used_regs();
+        self.this_fun_used_regs = init_used_regs();
+        self.asm_buf.current_fun = Some(String::new());
+    }
+
+    fn end_function(&mut self) -> String {
+        self.current_fun_name = None;
+        self.current_stack_offset = 0;
+        self.asm_buf.current_fun.take().unwrap()
+    }
+
     fn last_scope(&mut self) -> &mut Scope {
         self.scopes.last_mut().unwrap()
     }
 
     fn finish(&mut self){
-        if self.strs_to_emit.len() != 0 {
-            writeln!(&mut self.asm_out, ".section .rodata").unwrap();
+        if !self.strs_to_emit.is_empty() {
+            writeln!(self.asm_buf, ".section .rodata").unwrap();
             for (idx, str) in self.strs_to_emit.iter().enumerate() {
-                writeln!(&mut self.asm_out, ".Lstr{}:", idx).unwrap();
-                writeln!(&mut self.asm_out, "\t.asciz \"{}\"", str).unwrap();
+                writeln!(self.asm_buf, ".Lstr{}:", idx).unwrap();
+                writeln!(self.asm_buf, "\t.asciz \"{}\"", str).unwrap();
             }
         }
     }
@@ -428,15 +482,15 @@ fn emit_binary_instr(codegen_context : &mut CodegenContext, instruction : &str, 
         }
     }
     to.to_addressing_str(&mut codegen_context.value_buf, reg_type);
-    write!(&mut codegen_context.asm_out, "\t{} {}, ", instruction, codegen_context.value_buf).unwrap();
+    write!(codegen_context.asm_buf, "\t{} {}, ", instruction, codegen_context.value_buf).unwrap();
     from.to_addressing_str(&mut codegen_context.value_buf, reg_type);
-    writeln!(&mut codegen_context.asm_out, "{}", codegen_context.value_buf).unwrap();
+    writeln!(codegen_context.asm_buf, "{}", codegen_context.value_buf).unwrap();
 }
 
 // for single operand instructions
 fn emit_single_op_instr(codegen_context : &mut CodegenContext, instruction : &'static str, operand : &Value, reg_type : AsmType){
     operand.to_addressing_str(&mut codegen_context.value_buf, reg_type);
-    writeln!(&mut codegen_context.asm_out, "\t{} {}", instruction, codegen_context.value_buf).unwrap();
+    writeln!(&mut codegen_context.asm_buf, "\t{} {}", instruction, codegen_context.value_buf).unwrap();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -501,9 +555,9 @@ fn codegen_cast(codegen_context : &mut CodegenContext, val : Value, from : &Type
         (Type::Char, Type::Int) => {
             let write_val = val.into_write_val(codegen_context);
             write_val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Dword);
-            write!(&mut codegen_context.asm_out, "\tmovzx {}, ", codegen_context.value_buf).unwrap();
+            write!(codegen_context.asm_buf, "\tmovzx {}, ", codegen_context.value_buf).unwrap();
             write_val.to_addressing_str(&mut codegen_context.value_buf, AsmType::Byte);
-            writeln!(&mut codegen_context.asm_out, "{}", codegen_context.value_buf).unwrap();
+            writeln!(codegen_context.asm_buf, "{}", codegen_context.value_buf).unwrap();
             write_val.into()
         }
         _ => todo!()
@@ -703,7 +757,7 @@ fn codegen_function_call(codegen_context : &mut CodegenContext, fun : &ExprAst, 
 
     match fun {
         ExprAst::VarUse(fun_name) => {
-            writeln!(codegen_context.asm_out, "\tcall {}", fun_name).unwrap();
+            writeln!(codegen_context.asm_buf, "\tcall {}", fun_name).unwrap();
         }
         _ => todo!(), // TODO : indirect call (need to put the function pointer in a reg)
     }
@@ -758,16 +812,20 @@ fn codegen_expr(codegen_context : &mut CodegenContext, ast : &ExprAst) -> Result
 
 // TODO : should I add auto insert of return 0 for main
 
+const RET_LABEL_PREFIX : &'static str = ".ret";
+
 fn codegen_return(codegen_context : &mut CodegenContext, val : &ExprAst) -> Result<(), CodegenError> {
     let val = codegen_expr(codegen_context, val)?;
     let mov_type = asm_type_from_type(&codegen_context.current_fun_return_type);
     emit_mov(codegen_context, &WriteVal::Reg(Reg::Rax), val, mov_type);
-    emit_binary_instr(codegen_context, "add", &WriteVal::Reg(Reg::Rsp), &Value::Constant(24), AsmType::Qword);
+    writeln!(codegen_context.asm_buf, "\tjmp {}_{}", RET_LABEL_PREFIX, codegen_context.current_fun_name.as_ref().unwrap()).unwrap();
+    // TODO : change this
+    /*emit_binary_instr(codegen_context, "add", &WriteVal::Reg(Reg::Rsp), &Value::Constant(24), AsmType::Qword);
     for &reg in CALLEE_SAVED_REGS.iter().rev() {
         emit_single_op_instr(codegen_context, "pop", &Value::Reg(reg), AsmType::Qword);
     }
-    codegen_context.asm_out.push_str(FUN_EPILOGUE);
-    codegen_context.asm_out.push_str("\tret\n"); // TODO : have a method on a new type for the tab
+    codegen_context.asm_buf.push_str(FUN_EPILOGUE);
+    codegen_context.asm_buf.push_str("\tret\n");*/ // TODO : have a method on a new type for the tab
     Ok(())
 }
 
@@ -802,7 +860,7 @@ fn codegen_var_decl(codegen_context : &mut CodegenContext, name : &str, var_type
     codegen_context.add_var(Box::from(name), Var { 
         var_type: var_type.clone(), 
         stack_offset: Some(stack_offset),
-    });
+    })?;
     
 
     let var_mem = WriteVal::Mem(mem_addr_from_stack_off(stack_offset));
@@ -821,18 +879,18 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
     
     let if_idx = codegen_context.next_idx();
     let if_false_label = codegen_context.next_label_str();
-    writeln!(codegen_context.asm_out, "\tjz {}", if_false_label).unwrap();
-    writeln!(codegen_context.asm_out, "# if body {}", if_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "\tjz {}", if_false_label).unwrap();
+    writeln!(codegen_context.asm_buf, "# if body {}", if_idx).unwrap();
     codegen_statement(codegen_context, if_body)?;
 
     let end_label = match else_body {
         Some(else_body)=> {
             let else_label = if_false_label;
             let end_label = codegen_context.next_label_str();
-            writeln!(codegen_context.asm_out, "\tjmp {}", end_label).unwrap();
+            writeln!(codegen_context.asm_buf, "\tjmp {}", end_label).unwrap();
             
-            writeln!(codegen_context.asm_out, "# else body {}", if_idx).unwrap();
-            writeln!(codegen_context.asm_out, "{}:", else_label).unwrap();
+            writeln!(codegen_context.asm_buf, "# else body {}", if_idx).unwrap();
+            writeln!(codegen_context.asm_buf, "{}:", else_label).unwrap();
 
             codegen_statement(codegen_context, else_body)?;
 
@@ -840,8 +898,8 @@ fn codegen_if(codegen_context : &mut CodegenContext, condition : &ExprAst, if_bo
         }
         None => if_false_label,
     };
-    writeln!(codegen_context.asm_out, "# after if {}", if_idx).unwrap();
-    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    writeln!(codegen_context.asm_buf, "# after if {}", if_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "{}:", end_label).unwrap();
     codegen_context.unused_value(condition_val);
     Ok(())
 }
@@ -858,51 +916,51 @@ fn codegen_scope(codegen_context : &mut CodegenContext, body : &[StatementAst]) 
 fn codegen_while(codegen_context : &mut CodegenContext, condition : &ExprAst, while_body : &StatementAst) -> Result<(), CodegenError> {
     let while_idx = codegen_context.next_idx();
     let cond_label = codegen_context.next_label_str();
-    writeln!(codegen_context.asm_out, "# while condition {}", while_idx).unwrap();
-    writeln!(codegen_context.asm_out, "{}:", cond_label).unwrap();
+    writeln!(codegen_context.asm_buf, "# while condition {}", while_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "{}:", cond_label).unwrap();
     
     let condition_val = codegen_expr(codegen_context, condition)?;
     let condition_write_val = condition_val.clone().into_write_val(codegen_context);
     emit_binary_instr(codegen_context, "test", &condition_write_val, &condition_val, AsmType::Dword);
     let end_label = codegen_context.next_label_str();
-    writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
+    writeln!(codegen_context.asm_buf, "\tjz {}", end_label).unwrap();
 
-    writeln!(codegen_context.asm_out, "# while body {}", while_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "# while body {}", while_idx).unwrap();
     codegen_statement(codegen_context, while_body)?;
 
-    writeln!(codegen_context.asm_out, "\tjmp {}", cond_label).unwrap();
+    writeln!(codegen_context.asm_buf, "\tjmp {}", cond_label).unwrap();
 
-    writeln!(codegen_context.asm_out, "# end while {}", while_idx).unwrap();
-    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    writeln!(codegen_context.asm_buf, "# end while {}", while_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "{}:", end_label).unwrap();
     Ok(())
 }
 
 fn codegen_for(codegen_context : &mut CodegenContext, init : &StatementAst, condition : &ExprAst, change : &ExprAst, for_body : &StatementAst) -> Result<(), CodegenError> {
     let for_idx = codegen_context.next_idx();
-    writeln!(codegen_context.asm_out, "# for init {}", for_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "# for init {}", for_idx).unwrap();
     codegen_statement(codegen_context, init)?;
 
     let cond_label = codegen_context.next_label_str();
-    writeln!(codegen_context.asm_out, "# for condition {}", for_idx).unwrap();
-    writeln!(codegen_context.asm_out, "{}:", cond_label).unwrap();
+    writeln!(codegen_context.asm_buf, "# for condition {}", for_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "{}:", cond_label).unwrap();
     
     let condition_val = codegen_expr(codegen_context, condition)?;
     let condition_write_val = condition_val.clone().into_write_val(codegen_context);
     emit_binary_instr(codegen_context, "test", &condition_write_val, &condition_val, AsmType::Dword);
     let end_label = codegen_context.next_label_str();
-    writeln!(codegen_context.asm_out, "\tjz {}", end_label).unwrap();
+    writeln!(codegen_context.asm_buf, "\tjz {}", end_label).unwrap();
 
-    writeln!(codegen_context.asm_out, "# for body {}", for_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "# for body {}", for_idx).unwrap();
     codegen_statement(codegen_context, for_body)?;
 
-    writeln!(codegen_context.asm_out, "# for change {}", for_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "# for change {}", for_idx).unwrap();
 
     codegen_expr(codegen_context, change)?;
 
-    writeln!(codegen_context.asm_out, "\tjmp {}", cond_label).unwrap();
+    writeln!(codegen_context.asm_buf, "\tjmp {}", cond_label).unwrap();
 
-    writeln!(codegen_context.asm_out, "# end for {}", for_idx).unwrap();
-    writeln!(codegen_context.asm_out, "{}:", end_label).unwrap();
+    writeln!(codegen_context.asm_buf, "# end for {}", for_idx).unwrap();
+    writeln!(codegen_context.asm_buf, "{}:", end_label).unwrap();
     Ok(())
 }
 
@@ -957,20 +1015,12 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
         panic!("too much args"); // TODO : remove maximum (pass on the stack ? see amd64 c abi)
     }
 
-    codegen_context.current_fun_name = Some(Box::from(name));
-    codegen_context.current_fun_return_type = return_type.clone();
-    writeln!(&mut codegen_context.asm_out, "\t.globl	{}", name).unwrap();
-    writeln!(&mut codegen_context.asm_out, "{}:", name).unwrap();
-    codegen_context.asm_out.push_str(FUN_PRELUDE);
-    codegen_context.used_regs = init_used_regs();
-
     
-    // TODO : do this selectively (only if needed ?)
-    for &reg in CALLEE_SAVED_REGS {
-        emit_single_op_instr(codegen_context, "push", &Value::Reg(reg), AsmType::Qword);
-    }
+    writeln!(codegen_context.asm_buf, "\t.globl	{}", name).unwrap();
+    writeln!(codegen_context.asm_buf, "{}:", name).unwrap();
+    codegen_context.asm_buf.push_str(FUN_PRELUDE);
+    codegen_context.start_function(name, return_type);
 
-    emit_binary_instr(codegen_context, "sub", &WriteVal::Reg(Reg::Rsp), &Value::Constant(24), AsmType::Qword);
 
     // TODO : replace this vec with a smallvec ? (after removing maximum of args)
     let mut stack_offsets = ArrayVec::<u32, 6>::new();
@@ -1003,8 +1053,34 @@ fn codegen_function(codegen_context : &mut CodegenContext, name : &str, body: &[
     for arg in args {
         codegen_context.vars.remove(&arg.name);
     }
-    codegen_context.reset_stack_offset();
-    codegen_context.current_fun_name = None;
+    let vars_stack_size = codegen_context.max_stack_offset;
+    let fun_buf = codegen_context.end_function();
+
+
+    let callee_saved_regs_nb = CALLEE_SAVED_REGS.iter().filter(|&&r| codegen_context.this_fun_used_regs[r as usize]).count();
+    let callee_saved_regs_size = callee_saved_regs_nb * 8;
+    let full_stack_size = callee_saved_regs_nb * 8 + vars_stack_size as usize;
+    let aligned_stack_alloc  = full_stack_size.next_multiple_of(16) - callee_saved_regs_size;
+    let aligned_stack_alloc = aligned_stack_alloc.try_into().unwrap();
+    // TODO : do this selectively (only if needed ?)
+    emit_binary_instr(codegen_context, "sub", &WriteVal::Reg(Reg::Rsp), &Value::Constant(aligned_stack_alloc), AsmType::Qword);
+    for &reg in CALLEE_SAVED_REGS {
+        if codegen_context.this_fun_used_regs[reg as usize]{
+            emit_single_op_instr(codegen_context, "push", &Value::Reg(reg), AsmType::Qword);
+        }
+    }
+
+    codegen_context.asm_buf.push_str(&fun_buf);
+
+    writeln!(codegen_context.asm_buf, "{}_{}:", RET_LABEL_PREFIX, name).unwrap();
+    for &reg in CALLEE_SAVED_REGS.iter().rev() {
+        if codegen_context.this_fun_used_regs[reg as usize]{
+            emit_single_op_instr(codegen_context, "pop", &Value::Reg(reg), AsmType::Qword);
+        }
+    }
+    emit_binary_instr(codegen_context, "add", &WriteVal::Reg(Reg::Rsp), &Value::Constant(aligned_stack_alloc), AsmType::Qword);
+    codegen_context.asm_buf.push_str(FUN_EPILOGUE);
+    codegen_context.asm_buf.push_str("\tret\n");
 
     let args_type = args.iter().map(|arg| arg.arg_type.clone()).collect::<Box<[_]>>();
     codegen_context.vars.insert(Box::from(name), Var { var_type: Type::Function(Box::new(FunctionType {
@@ -1041,6 +1117,6 @@ pub(crate) fn codegen(ast : Vec<TopLevelAst>, out_path : &Path) -> Result<(), Co
     }
     codegen_context.finish();
     let mut f = File::create(out_path).unwrap();
-    f.write_all(codegen_context.asm_out.as_bytes()).unwrap();
+    f.write_all(codegen_context.asm_buf.as_bytes()).unwrap();
     Ok(())
 }

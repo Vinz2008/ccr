@@ -1,4 +1,4 @@
-use std::{env, fs};
+use std::{env, fs, process::{self, ExitCode}};
 
 use crate::{assembler::assemble, codegen::codegen, lexer::lex, linker::link, parser::parse, preprocessor::preprocess};
 
@@ -27,7 +27,7 @@ mod linker;
 // TODO : add structs
 // TODO : add comma operators (will it create problems when parsing function args ?)
 
-fn main() {
+fn main() -> ExitCode {
     let mut should_link = true;
     let mut should_assemble = true;
     let mut f = None;
@@ -49,14 +49,20 @@ fn main() {
     let contents = fs::read_to_string(f).unwrap();
     let preprocessed_contents = preprocess(contents);
     let tokens = lex(&preprocessed_contents).unwrap(); // TODO : better error printing (use ariadne)
-    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), &tokens);
+    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), tokens);
     let ast = parse(tokens).unwrap(); // TODO : better error printing
-    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), &ast);
+    // TODO : add optimizations to the ast
+    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), ast);
     let asm_path = "out.s".as_ref();
     codegen(ast, asm_path).unwrap(); // TODO : better error printing
     if should_link {
-        link(asm_path, output_file.as_ref());
+        let link_res = link(asm_path, output_file.as_ref()); // better error printing
+        if let Err(e) = link_res {
+            eprintln!("linker failed : {:?}", e); // better error printing (use Display instead ?)
+            return ExitCode::FAILURE;
+        }
     } else if should_assemble {
         assemble(asm_path);
     }
+    ExitCode::SUCCESS
 }

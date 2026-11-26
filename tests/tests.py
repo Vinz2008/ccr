@@ -20,14 +20,13 @@ def run_test(test_file):
     cmd = f"{ccr_path} {tests_dir}/{test_file} -o {tests_dir}/a.out"
     # TODO : also pipe stderr separately and only print it if error
     pipe = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
-    out_run, _ = pipe.communicate()
+    out_stdout, _ = pipe.communicate()
     return_code = pipe.returncode
     if return_code == 0:
         passed_tests += 1
         print("✅")
     else:
         print("❌")
-    # TODO : check stderr of compiler
     # TODO : run the executable generated
 
 # TODO : rebuild the compiler
