@@ -72,16 +72,16 @@ impl TryFrom<Operator> for BinaryOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum SizeofArg {
     Type(Type),
     Expr(Box<ExprAst>),
 }
 
 // TODO : make it flat ? (is more optimized, but would make it more complicated to mutate it for peep hole opts)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ExprAst {
-    Number(u128),
+    Number(i128),
     Char(char),
     BinOp {
         lhs : Box<ExprAst>,
@@ -108,7 +108,7 @@ pub(crate) enum ExprAst {
 
 // TODO : separate this between real statements (the expresions that can be used here : if (a) [STATEMENT] and the block items, that include additionaly var decls, which can't be used in the if body without a block)
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum StatementAst {
     Expr(ExprAst),
     Return(ExprAst),

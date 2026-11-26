@@ -27,6 +27,7 @@ pub(crate) enum Type {
     Integer(Sign, IntegerType),
     Function(Box<FunctionType>),
     Ptr(Box<Type>), // TODO : need to add char const*
+    Void,
 }
 
 impl Type {
@@ -45,12 +46,12 @@ impl Type {
     }
 }
 
-fn guess_lit_nb_type(nb : u128) -> Type {
-    // TODO : improve this so I can have u64 literals work
-    if nb > i64::MAX as u128 {
+fn guess_lit_nb_type(nb : i128) -> Type {
+    // TODO : improve this so I can have u64 literals work (also test lower bounds, like if lower than min because with optimization can have negatives)
+    if nb > i64::MAX as i128 {
         panic!("too big of a number");
     }
-    if nb > i32::MAX as u128 {
+    if nb > i32::MAX as i128 {
         Type::Integer(Sign::Signed, IntegerType::Long)
     } else {
         Type::Integer(Sign::Signed, IntegerType::Int)

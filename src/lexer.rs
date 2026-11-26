@@ -42,7 +42,7 @@ pub(crate) enum Operator {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Token {
-    Number(u128),
+    Number(i128),
     Operator(Operator),
     Char(char),
     LeftParen, // ( 
@@ -82,7 +82,7 @@ fn lex_nb(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Re
     }
 
     // TODO : optimize this by transforming to a smaller number like i64, i32, etc, if small (will it really optimize it ? test it)
-    let nb = numbers.as_str().parse::<u128>().unwrap();
+    let nb = numbers.as_str().parse::<i128>().unwrap();
     tokens.push_back(Token::Number(nb));
     Ok(())
 }
@@ -187,6 +187,7 @@ fn lex_type_inner(chars : &mut Peekable<Chars<'_>>, ident : &str, is_const : boo
         "short" => Type::Integer(sign, IntegerType::Short),
         "int" => Type::Integer(sign, IntegerType::Int),
         "long" => Type::Integer(sign, IntegerType::Long),
+        "void" => Type::Void,
         _ => return Err(LexerError::WrongType(Box::from(ident))), // TODO : also support having just unsigned for the type
     };
     pass_space(chars)?;
@@ -220,7 +221,7 @@ fn lex_type(chars : &mut Peekable<Chars<'_>>, ident : &str) -> Result<Type, Lexe
 fn lex_identifier(chars : &mut Peekable<Chars<'_>>, tokens : &mut VecDeque<Token>) -> Result<(), LexerError>{
     let identifier = lex_identifier_inner(chars)?;
     let tok = match identifier.as_str() {
-        "char" | "short" | "int" | "long" | "const" | "unsigned"  => Token::Type(lex_type(chars, identifier.as_str())?), // TODO : add more types
+        "char" | "short" | "int" | "long" | "const" | "unsigned" | "void"  => Token::Type(lex_type(chars, identifier.as_str())?), // TODO : add more types
         "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,

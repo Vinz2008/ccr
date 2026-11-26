@@ -1,12 +1,13 @@
 use std::{fs, process::ExitCode};
 
-use crate::{assembler::assemble, codegen::codegen, lexer::lex, linker::link, options::parse_options, parser::parse, preprocessor::preprocess};
+use crate::{assembler::assemble, codegen::codegen, lexer::lex, linker::link, optimizer::optimize, options::{OptLevel, parse_options}, parser::parse, preprocessor::preprocess};
 
 mod options;
 mod preprocessor;
 mod lexer;
 mod parser;
 mod types;
+mod optimizer;
 mod codegen;
 mod assembler;
 mod linker;
@@ -30,10 +31,15 @@ fn main() -> ExitCode {
     let contents = fs::read_to_string(options.source_file).unwrap();
     let preprocessed_contents = preprocess(contents);
     let tokens = lex(&preprocessed_contents).unwrap(); // TODO : better error printing (use ariadne)
-    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), tokens);
-    let ast = parse(tokens).unwrap(); // TODO : better error printing
-    // TODO : add optimizations to the ast
-    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!($val), ast);
+    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!(tokens), tokens);
+    let mut ast = parse(tokens).unwrap(); // TODO : better error printing
+    println!("[{}:{}:{}] {} = {:#?}", file!(), line!(), column!(), stringify!(ast), ast);
+    
+    optimize(&mut ast, options.opt_level);
+    if options.opt_level != OptLevel::O0 {
+        println!("[{}:{}:{}] optimized {} = {:#?}", file!(), line!(), column!(), stringify!(ast), ast);
+    }
+    
     let asm_path = "out.s".as_ref();
     codegen(ast, asm_path).unwrap(); // TODO : better error printing
     if options.should_link {

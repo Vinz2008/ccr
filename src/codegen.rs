@@ -530,7 +530,7 @@ fn emit_mov(codegen_context : &mut CodegenContext, to : &WriteVal, mut from : Va
 }
 
 
-fn codegen_number(nb : u128) -> Value {
+fn codegen_number(nb : i128) -> Value {
     let nb : i64 = nb.try_into().unwrap();
     Value::Constant(nb)
 }
@@ -949,6 +949,7 @@ pub(crate) fn type_size(var_type : &Type) -> u32 {
     match var_type {
         Type::Integer(_, integer_type) => type_size_integer(*integer_type),
         Type::Function(_) | Type::Ptr { .. } => 8,
+        Type::Void => panic!("trying to get size of incomplete type : {:?}", var_type), // TODO : better error handling
     }
 }
 
@@ -965,6 +966,7 @@ fn asm_type_from_type(t : &Type) -> AsmType {
     match t {
         Type::Integer(_, i_t) => asm_type_from_type_integer(*i_t),
         Type::Function(_) | Type::Ptr { .. } => AsmType::Qword,
+        Type::Void => panic!("trying to use a incomplete type : {:?}", t),
     }
 }
 
